@@ -249,9 +249,9 @@ docker compose ps
 (сборка arm64 под QEMU на GitHub падает на `npm install` в образе — SIGILL, поэтому в релизе
 её нет).
 
-- **Пакет должен быть публичным**, иначе `docker compose up -d` на чужой машине получит
-  `unauthorized`. Один раз после первого релиза: GitHub → Packages → `yomibako` → Package settings
-  → Change visibility → Public. Иначе нужен `docker login ghcr.io` на целевой машине.
+- **Пакет публичный**: образ тянется без логина. Если доступ когда-нибудь закроют (Package
+  settings → Change visibility), на машине понадобится `docker login ghcr.io` либо локальная
+  сборка (ниже).
 - **Пиннинг:** `YOMIBAKO_IMAGE=ghcr.io/mimic890/yomibako:0.1.0` в `.env` вместо `:latest`, если
   нужны воспроизводимые передеплои.
 - **Сборка на месте** (без реестра или на arm64): раскомментировать `build:` у сервиса `yomibako` в
@@ -362,8 +362,9 @@ Release (`.github/workflows/release.yml`) повторяет `go vet`/`go test` 
 - **Docker-сокет в контейнере** даёт Yomibako права уровня root на хосте: он может запускать и
   останавливать любые контейнеры, а не только `miwayomi`. Альтернатива — запускать Yomibako на
   хосте и не монтировать сокет.
-- **Пакет GHCR по умолчанию приватный.** Пока видимость не переключена на Public (или на машине
-  нет `docker login ghcr.io`), `docker compose up -d` не сможет забрать `yomibako`.
+- **Образ живёт в GHCR.** Если пакет станет приватным или GitHub будет недоступен,
+  `docker compose up -d` не заберёт `yomibako`: нужен `docker login ghcr.io` или локальная
+  сборка (раскомментированный `build:` в compose).
 - **Образ miwayomi не гарантированно доступен в реестре.** Compose умеет собрать его из
   upstream-репозитория (`MIWAYOMI_BUILD_CONTEXT`, зафиксирован на `v0.2.9`), но это долгая
   Gradle-сборка; для продакшена лучше один раз собрать и хранить свой образ по immutable-тегу.

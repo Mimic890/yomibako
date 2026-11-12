@@ -7,10 +7,10 @@ name: yomibako
 
 services:
   yomibako:
-    # Published by .github/workflows/release.yml on every push to main and on v* tags.
-    # Pin it (`YOMIBAKO_IMAGE=ghcr.io/mimic890/yomibako:0.1.0`) instead of :latest if
-    # you want reproducible redeploys. Make the package public once, otherwise the
-    # pull needs `docker login ghcr.io`.
+    # Published by .github/workflows/release.yml: push to main -> latest + sha-<commit>,
+    # tag v1.2.3 -> 1.2.3 + 1.2. The package is public, so no login is needed.
+    # Pin it (`YOMIBAKO_IMAGE=ghcr.io/mimic890/yomibako:0.1.0`) instead of :latest for
+    # reproducible redeploys; if a pull is denied, `docker login ghcr.io` or build locally.
     image: ${YOMIBAKO_IMAGE:-ghcr.io/mimic890/yomibako:latest}
     # Fallback: build locally instead of pulling, then `docker compose build yomibako`.
     # build:
