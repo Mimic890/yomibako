@@ -5,8 +5,9 @@
  * so there is no daemon to start or stop here. That is also why the idle timer only applies to
  * Mihon: an idle Node process would cost memory for nothing.
  *
- * Credentials for individual sources are set once with `lnreader auth <plugin> --home <dir>`; this
- * proxy deliberately does not collect them.
+ * Credentials for individual sources are set once with `lnreader auth <plugin> --home <dir>` (needs a
+ * real browser) or imported from a Netscape cookies.txt with the `cookies` config field; this proxy
+ * deliberately does not collect them itself.
  */
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -17,6 +18,7 @@ const exec = promisify(execFile);
 export function createLnReader(cfg = {}) {
   const command = cfg.command || 'lnreader';
   const home = cfg.home || '';
+  const cookies = cfg.cookies || '';
   const limit = Math.max(1, Number(cfg.concurrency) || 2);
   let active = 0;
   const waiting = [];
@@ -36,7 +38,12 @@ export function createLnReader(cfg = {}) {
   }
 
   function argsFor(args) {
-    return [...(home ? ['--home', home] : []), ...args, '--no-interactive'];
+    return [
+      ...(home ? ['--home', home] : []),
+      ...(cookies ? ['--cookies', cookies] : []),
+      ...args,
+      '--no-interactive',
+    ];
   }
 
   async function run(args, signal, timeout) {

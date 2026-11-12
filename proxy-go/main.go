@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,6 +43,7 @@ type LnReaderConfig struct {
 	Enabled     bool   `json:"enabled"`
 	Command     string `json:"command"`
 	Home        string `json:"home"`
+	Cookies     string `json:"cookies"`
 	Concurrency int    `json:"concurrency"`
 }
 
@@ -160,7 +162,9 @@ func newServer(cfg Config, runtimes map[string]Runtime, jobs *jobs) *server {
 }
 
 func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.Token != "" && !authorized(r, s.cfg.Token) {
+	// /health is the liveness probe of the container and of the BookOrbit plugins:
+	// it starts nothing, so it stays open even when a token is configured.
+	if r.URL.Path != "/health" && s.cfg.Token != "" && !authorized(r, s.cfg.Token) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
 		return
 	}
@@ -331,12 +335,21 @@ type httpError struct {
 
 func (e httpError) Error() string { return e.message }
 
+// authorized accepts the token as a bearer header (plugins, curl), as X-Proxy-Token,
+// or as a ?token= query parameter. The query form exists because BookOrbit fetches the
+// file URL returned by /v1/grab itself and does not forward the indexer's credentials.
 func authorized(r *http.Request, token string) bool {
-	header := r.Header.Get("Authorization")
-	if strings.HasPrefix(header, "Bearer ") {
-		return strings.TrimPrefix(header, "Bearer ") == token
+	candidates := []string{
+		strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "),
+		r.Header.Get("X-Proxy-Token"),
+		r.URL.Query().Get("token"),
 	}
-	return r.Header.Get("X-Proxy-Token") == token
+	for _, candidate := range candidates {
+		if candidate != "" && subtle.ConstantTimeCompare([]byte(candidate), []byte(token)) == 1 {
+			return true
+		}
+	}
+	return false
 }
 
 func requireString(value, field string) (string, error) {

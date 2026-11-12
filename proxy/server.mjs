@@ -33,7 +33,11 @@ await jobs.init();
 const server = http.createServer(async (request, response) => {
   try {
     const url = new URL(request.url, 'http://localhost');
-    if (config.token && !authorized(request)) return sendJson(response, 401, { error: 'Unauthorized' });
+    // /health is the liveness probe of the container and of the plugins: it starts nothing,
+    // so it stays open even when a token is configured.
+    if (config.token && url.pathname !== '/health' && !authorized(request, url)) {
+      return sendJson(response, 401, { error: 'Unauthorized' });
+    }
 
     if (request.method === 'GET' && url.pathname === '/health') {
       const health = Object.fromEntries(
@@ -108,10 +112,16 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
   });
 }
 
-function authorized(request) {
+// The token may also travel as ?token=: BookOrbit fetches the URL returned by /v1/grab itself
+// and does not forward the indexer's credentials.
+function authorized(request, url) {
   const header = request.headers.authorization ?? '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : request.headers['x-proxy-token'];
-  return token === config.token;
+  const candidates = [
+    header.startsWith('Bearer ') ? header.slice(7) : '',
+    request.headers['x-proxy-token'],
+    url.searchParams.get('token'),
+  ];
+  return candidates.some((candidate) => candidate && candidate === config.token);
 }
 
 function pickRuntime(name) {

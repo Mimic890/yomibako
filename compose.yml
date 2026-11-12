@@ -1,19 +1,77 @@
-# The Mihon side of the proxy. The proxy starts and stops this container on demand, so it is
-# created here but deliberately not restarted by Docker: an idle stack should cost no memory.
+# One `docker compose up -d` brings up both halves of the stack:
+#   yomibako  — always-on service the BookOrbit plugins talk to (port 7345);
+#   miwayomi  — the Mihon runtime, started and stopped by yomibako on demand.
+#
+# Copy .env.example to .env before the first run to set the token and the Docker GID.
+name: yomibako
+
 services:
+  yomibako:
+    build:
+      context: ./proxy-go
+    image: yomibako:latest
+    container_name: yomibako
+    restart: unless-stopped
+    ports:
+      # Only on localhost: this service can start containers and download files.
+      # Reach it from another host through an SSH tunnel or a reverse proxy with TLS.
+      - "127.0.0.1:7345:7345"
+    environment:
+      # Empty = no authentication. Set it here and paste the same value into the
+      # BookOrbit indexer setting "Yomibako token".
+      YOMIBAKO_TOKEN: ${YOMIBAKO_TOKEN:-}
+      # Sibling container on the compose network, not 127.0.0.1.
+      MIWAYOMI_URL: http://miwayomi:4567
+    volumes:
+      # Yomibako runs `docker start/stop miwayomi`, so it needs the socket.
+      # This is root-equivalent access to the host: keep the port on localhost.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # LNReader profile (--home): plugin indexes and imported cookies. Survives recreation.
+      - lnreader-home:/home/yomibako/.lnreader
+    group_add:
+      # GID that owns the socket on the host: stat -c '%g' /var/run/docker.sock
+      - "${DOCKER_GID:-999}"
+    mem_limit: 512m
+    healthcheck:
+      # /health starts nothing and needs no token.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:7345/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
   miwayomi:
-    image: ghcr.io/miwayomi/miwayomi:latest
+    # Prebuilt image when the registry serves it; otherwise build the upstream
+    # repository once with `docker compose build miwayomi`.
+    image: ${MIWAYOMI_IMAGE:-ghcr.io/miwayomi/miwayomi:latest}
+    build:
+      context: ${MIWAYOMI_BUILD_CONTEXT:-https://github.com/miwayomi/miwayomi.git#main}
     container_name: miwayomi
+    # Yomibako stops this container after mihon.idleMinutes of inactivity; Docker
+    # must not undo that, so the stack idles at ~0 MB for the runtime.
     restart: "no"
     ports:
+      # WebUI/API. Open http://127.0.0.1:4567 to add the Keiyoushi repo and install
+      # extensions; the REST API on the same port is what Yomibako calls.
       - "127.0.0.1:4567:4567"
     environment:
       JAVA_OPTS: -Xmx512m -Xms64m -XX:MaxMetaspaceSize=256m -XX:+UseSerialGC
-      # Point this at a FlareSolverr instance if one is needed; empty disables solving.
+      # Empty disables Cloudflare solving. Point it at FlareSolverr if a source needs it,
+      # for example http://flaresolverr:8191 with the sidecar added to this file.
       FLARESOLVERR_URL: ""
     volumes:
       - miwayomi-data:/data
     mem_limit: 768m
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:4567/api/v1/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      # The JVM plus extension loading needs a while on a cold start.
+      start_period: 60s
+      retries: 3
 
 volumes:
+  # miwayomi state: SQLite DB, installed extensions, cookies, caches.
   miwayomi-data:
+  # LNReader CLI --home: plugin indexes and per-plugin cookies.
+  lnreader-home:

@@ -100,9 +100,14 @@ func (l *lnReader) run(timeout time.Duration, args ...string) (string, error) {
 }
 
 func (l *lnReader) argsFor(args []string) []string {
-	out := make([]string, 0, len(args)+3)
+	out := make([]string, 0, len(args)+5)
 	if l.cfg.Home != "" {
 		out = append(out, "--home", l.cfg.Home)
+	}
+	// Netscape cookies.txt: the way to log in when `lnreader auth` (a real browser)
+	// is not available, as inside the container.
+	if l.cfg.Cookies != "" {
+		out = append(out, "--cookies", l.cfg.Cookies)
 	}
 	out = append(out, args...)
 	out = append(out, "--no-interactive")

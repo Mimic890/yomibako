@@ -18,13 +18,19 @@ import (
 	"time"
 )
 
+// sourcesTTL bounds how long the miwayomi source list is reused. Extensions can be
+// installed in miwayomi's WebUI while Yomibako keeps running, so a cached list is
+// refreshed on a miss and after this interval anyway.
+const sourcesTTL = 5 * time.Minute
+
 type mihon struct {
-	cfg       MihonConfig
-	client    *http.Client
-	lastUsed  atomic.Int64
-	active    atomic.Int32
-	sourcesMu sync.Mutex
-	sources   []mihonSource
+	cfg         MihonConfig
+	client      *http.Client
+	lastUsed    atomic.Int64
+	active      atomic.Int32
+	sourcesMu   sync.Mutex
+	sources     []mihonSource
+	sourcesTime time.Time
 }
 
 type mihonSource struct {
@@ -181,7 +187,11 @@ func (m *mihon) getJSON(path string, value any) error {
 	}
 	decoder := json.NewDecoder(resp.Body)
 	decoder.UseNumber()
-	return decoder.Decode(value)
+	if err := decoder.Decode(value); err != nil {
+		// Usually a wrong mihon.baseUrl: another backend answering 200 with HTML.
+		return fmt.Errorf("miwayomi %s did not return JSON: %w", path, err)
+	}
+	return nil
 }
 
 func (m *mihon) getBuffer(imageURL string) (imageData, error) {
@@ -206,29 +216,53 @@ func (m *mihon) getBuffer(imageURL string) (imageData, error) {
 	return imageData{data: data, contentType: resp.Header.Get("Content-Type")}, nil
 }
 
-func (m *mihon) sourceID(sourceName string) (string, error) {
+func (m *mihon) loadSources(force bool) ([]mihonSource, error) {
 	m.sourcesMu.Lock()
 	defer m.sourcesMu.Unlock()
 
-	if m.sources == nil {
-		var page struct {
-			Manga []mihonSource `json:"manga"`
+	if !force && m.sources != nil && time.Since(m.sourcesTime) < sourcesTTL {
+		return m.sources, nil
+	}
+	var page struct {
+		Manga []mihonSource `json:"manga"`
+	}
+	if err := m.getJSON("/api/v1/sources", &page); err != nil {
+		return nil, err
+	}
+	m.sources = page.Manga
+	m.sourcesTime = time.Now()
+	return m.sources, nil
+}
+
+func findSource(sources []mihonSource, sourceName string) (string, bool) {
+	wanted := strings.ToLower(strings.TrimSpace(sourceName))
+	for _, source := range sources {
+		if fmt.Sprint(source.ID) == wanted || strings.ToLower(source.Name) == wanted {
+			return fmt.Sprint(source.ID), true
 		}
-		if err := m.getJSON("/api/v1/sources", &page); err != nil {
-			return "", err
-		}
-		m.sources = page.Manga
+	}
+	return "", false
+}
+
+func (m *mihon) sourceID(sourceName string) (string, error) {
+	sources, err := m.loadSources(false)
+	if err != nil {
+		return "", err
+	}
+	if id, ok := findSource(sources, sourceName); ok {
+		return id, nil
 	}
 
-	wanted := strings.ToLower(strings.TrimSpace(sourceName))
-	for _, source := range m.sources {
-		if fmt.Sprint(source.ID) == wanted || strings.ToLower(source.Name) == wanted {
-			return fmt.Sprint(source.ID), nil
-		}
+	// Miss: the extension was probably installed after the list was cached. Refresh once.
+	if sources, err = m.loadSources(true); err != nil {
+		return "", err
+	}
+	if id, ok := findSource(sources, sourceName); ok {
+		return id, nil
 	}
 
 	known := make([]string, 0, 12)
-	for _, source := range m.sources {
+	for _, source := range sources {
 		if len(known) == 12 {
 			break
 		}

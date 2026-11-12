@@ -89,7 +89,8 @@ export default {
 
     return {
       // The proxy answers immediately and downloads while BookOrbit fetches this URL.
-      url: endpoint(config, job.url),
+      // BookOrbit does not forward this indexer's token, so it travels in the URL.
+      url: fileEndpoint(config, job.url),
       fileName: job.fileName,
       sizeBytes: null,
       format: job.format || 'epub',
@@ -100,6 +101,15 @@ export default {
 function endpoint(config, path) {
   const base = String(config.baseUrl || 'http://127.0.0.1:7345').trim();
   return new URL(String(path).replace(/^\/+/, ''), base.endsWith('/') ? base : `${base}/`).href;
+}
+
+// BookOrbit fetches the file URL on its own, without the indexer's headers, so the
+// token has to be part of the URL (Yomibako accepts ?token= for /v1/files).
+function fileEndpoint(config, path) {
+  const url = new URL(endpoint(config, path));
+  const token = setting(config, 'token');
+  if (token) url.searchParams.set('token', token);
+  return url.href;
 }
 
 function setting(config, key) {

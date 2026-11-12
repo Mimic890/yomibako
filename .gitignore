@@ -2,11 +2,16 @@
 proxy/config.json
 proxy/data/
 proxy-go/config.json
+.env
 
 # Go build and test output
 proxy-go/yomibako
 *.test
 *.out
+
+# Editor
+.idea/
+.vscode/
 
 # Node
 node_modules/

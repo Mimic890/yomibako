@@ -1,6 +1,8 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -127,5 +129,86 @@ func TestJobsRejectDisabledRuntime(t *testing.T) {
 
 	if _, err := queue.start("mihon", fakeRuntime{enabled: false}, GrabRequest{Title: "x"}); err == nil {
 		t.Error("start accepted a disabled runtime")
+	}
+}
+
+func testServer(t *testing.T, token string) *server {
+	t.Helper()
+	queue, err := newJobs(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(queue.dir) })
+	runtimes := map[string]Runtime{
+		"mihon":    fakeRuntime{enabled: true},
+		"lnreader": fakeRuntime{enabled: true},
+	}
+	return newServer(Config{Token: token}, runtimes, queue)
+}
+
+func doRequest(s *server, method, target string, headers map[string]string) int {
+	request := httptest.NewRequest(method, target, nil)
+	for key, value := range headers {
+		request.Header.Set(key, value)
+	}
+	recorder := httptest.NewRecorder()
+	s.ServeHTTP(recorder, request)
+	return recorder.Code
+}
+
+func TestHealthStaysPublicWithToken(t *testing.T) {
+	s := testServer(t, "secret")
+	if code := doRequest(s, http.MethodGet, "/health", nil); code != http.StatusOK {
+		t.Errorf("/health = %d, want %d", code, http.StatusOK)
+	}
+}
+
+func TestTokenGuardsEverythingElse(t *testing.T) {
+	s := testServer(t, "secret")
+	if code := doRequest(s, http.MethodPost, "/v1/search", nil); code != http.StatusUnauthorized {
+		t.Errorf("unauthenticated search = %d, want %d", code, http.StatusUnauthorized)
+	}
+	if code := doRequest(s, http.MethodPost, "/v1/search", map[string]string{"Authorization": "Bearer wrong"}); code != http.StatusUnauthorized {
+		t.Errorf("wrong token = %d, want %d", code, http.StatusUnauthorized)
+	}
+	if code := doRequest(s, http.MethodPost, "/v1/search", map[string]string{"Authorization": "Bearer secret"}); code == http.StatusUnauthorized {
+		t.Error("bearer token was rejected")
+	}
+	if code := doRequest(s, http.MethodPost, "/v1/search", map[string]string{"X-Proxy-Token": "secret"}); code == http.StatusUnauthorized {
+		t.Error("X-Proxy-Token was rejected")
+	}
+}
+
+func TestTokenAcceptedAsQueryParameter(t *testing.T) {
+	// BookOrbit fetches the URL from /v1/grab itself and sends no headers, so the
+	// token has to be able to travel in the URL.
+	s := testServer(t, "secret")
+	if code := doRequest(s, http.MethodGet, "/v1/files/unknown?token=wrong", nil); code != http.StatusUnauthorized {
+		t.Errorf("wrong query token = %d, want %d", code, http.StatusUnauthorized)
+	}
+	if code := doRequest(s, http.MethodGet, "/v1/files/unknown?token=secret", nil); code != http.StatusNotFound {
+		t.Errorf("valid query token = %d, want %d", code, http.StatusNotFound)
+	}
+}
+
+func TestLnReaderArgsCarryGlobalFlags(t *testing.T) {
+	runtime := newLnReader(LnReaderConfig{
+		Enabled: true,
+		Home:    "/home/yomibako/.lnreader",
+		Cookies: "/config/cookies.txt",
+	})
+	got := runtime.argsFor([]string{"search", "book", "--json"})
+	want := []string{
+		"--home", "/home/yomibako/.lnreader",
+		"--cookies", "/config/cookies.txt",
+		"search", "book", "--json", "--no-interactive",
+	}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("argsFor = %v, want %v", got, want)
+	}
+
+	bare := newLnReader(LnReaderConfig{Enabled: true}).argsFor([]string{"--version"})
+	if want := "--version --no-interactive"; strings.Join(bare, " ") != want {
+		t.Errorf("argsFor without home/cookies = %v, want %q", bare, want)
 	}
 }

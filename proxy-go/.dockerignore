@@ -1,0 +1,11 @@
+# Local build output and configuration
+yomibako
+*.test
+*.out
+config.json
+data/
+
+# VCS / editor noise
+.git
+.gitignore
+.DS_Store

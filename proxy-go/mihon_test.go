@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -103,5 +104,57 @@ func TestMihonGrabBuildsCBZ(t *testing.T) {
 		if string(data) != expected {
 			t.Errorf("entry %q = %q, want %q", entry.Name, data, expected)
 		}
+	}
+}
+
+func TestMihonSourceListPicksUpNewExtensions(t *testing.T) {
+	var installed atomic.Bool
+	var calls atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/sources", func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		if !installed.Load() {
+			_, _ = io.WriteString(w, `{"manga":[]}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"manga":[{"id":"42","name":"Late"}]}`)
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	runtime := newMihon(MihonConfig{Enabled: true, BaseURL: server.URL})
+	if _, err := runtime.sourceID("Late"); err == nil {
+		t.Fatal("sourceID resolved a source that is not installed yet")
+	}
+
+	// The user installs the extension in miwayomi's WebUI while Yomibako is running.
+	installed.Store(true)
+	id, err := runtime.sourceID("late")
+	if err != nil {
+		t.Fatalf("sourceID after install: %v", err)
+	}
+	if id != "42" {
+		t.Errorf("sourceID = %q, want %q", id, "42")
+	}
+}
+
+func TestMihonSourceListIsCached(t *testing.T) {
+	var calls atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/sources", func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		_, _ = io.WriteString(w, `{"manga":[{"id":"1","name":"Cached"}]}`)
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	runtime := newMihon(MihonConfig{Enabled: true, BaseURL: server.URL})
+	for i := 0; i < 3; i++ {
+		if _, err := runtime.sourceID("Cached"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("/api/v1/sources called %d times, want 1", got)
 	}
 }

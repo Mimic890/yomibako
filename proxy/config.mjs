@@ -24,6 +24,7 @@ const DEFAULTS = {
     enabled: true,
     command: 'lnreader',
     home: '',
+    cookies: '',
     concurrency: 2,
   },
 };
