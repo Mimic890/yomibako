@@ -41,7 +41,9 @@ jobs:
     needs: verify
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
+      # No QEMU: the arm64 leg of the build died with SIGILL (exit 132) while npm
+      # installed @lnreader/cli under emulation. amd64 is built natively; on an arm64
+      # host build the image locally (see README -> «Образ Yomibako»).
       - uses: docker/setup-buildx-action@v3
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -67,8 +69,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: proxy-go
-          # Matches the upstream miwayomi images (amd64 servers and arm64 boxes).
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

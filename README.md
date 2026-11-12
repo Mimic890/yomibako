@@ -244,15 +244,19 @@ docker compose ps
 | тег `v1.2.3` | `1.2.3`, `1.2`, `sha-<commit>` |
 | ручной запуск | те же, что для ветки/тега |
 
-Оттуда же берётся архитектура: `linux/amd64` и `linux/arm64`.
+Архитектура — `linux/amd64`. На arm64-хосте (Ampere, Raspberry) образ собирается локально:
+раскомментируйте `build:` у `yomibako` в `compose.yml` и выполните `docker compose build yomibako`
+(сборка arm64 под QEMU на GitHub падает на `npm install` в образе — SIGILL, поэтому в релизе
+её нет).
 
 - **Пакет должен быть публичным**, иначе `docker compose up -d` на чужой машине получит
   `unauthorized`. Один раз после первого релиза: GitHub → Packages → `yomibako` → Package settings
   → Change visibility → Public. Иначе нужен `docker login ghcr.io` на целевой машине.
 - **Пиннинг:** `YOMIBAKO_IMAGE=ghcr.io/mimic890/yomibako:0.1.0` в `.env` вместо `:latest`, если
   нужны воспроизводимые передеплои.
-- **Сборка на месте** (без реестра): раскомментировать `build:` у сервиса `yomibako` в `compose.yml`
-  и выполнить `docker compose build yomibako` — дальше `up -d` возьмёт локальный образ.
+- **Сборка на месте** (без реестра или на arm64): раскомментировать `build:` у сервиса `yomibako` в
+  `compose.yml` и выполнить `docker compose build yomibako` — дальше `up -d` возьмёт локальный
+  образ.
 
 **Версия miwayomi зафиксирована.** `MIWAYOMI_IMAGE` и `MIWAYOMI_BUILD_CONTEXT` по умолчанию
 указывают на один и тот же релиз (`0.2.9` / тег `v0.2.9`, коммит `bf18765`), так что пересборка
