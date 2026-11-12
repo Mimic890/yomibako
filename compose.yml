@@ -41,11 +41,15 @@ services:
       retries: 3
 
   miwayomi:
-    # Prebuilt image when the registry serves it; otherwise build the upstream
-    # repository once with `docker compose build miwayomi`.
-    image: ${MIWAYOMI_IMAGE:-ghcr.io/miwayomi/miwayomi:latest}
+    # Pinned to one upstream release, and the image and the build context below
+    # point at that same release: a rebuild cannot silently pick up a newer main.
+    # For production: `docker compose build miwayomi` once, push the result to your
+    # own registry and set MIWAYOMI_IMAGE to that tag instead of a :latest.
+    image: ${MIWAYOMI_IMAGE:-ghcr.io/miwayomi/miwayomi:0.2.9}
     build:
-      context: ${MIWAYOMI_BUILD_CONTEXT:-https://github.com/miwayomi/miwayomi.git#main}
+      # v0.2.9 = bf18765a00cfc639ead84d97e071383c436ca7d7; use the SHA for full
+      # reproducibility, or a newer tag after checking the REST API is unchanged.
+      context: ${MIWAYOMI_BUILD_CONTEXT:-https://github.com/miwayomi/miwayomi.git#v0.2.9}
     container_name: miwayomi
     # Yomibako stops this container after mihon.idleMinutes of inactivity; Docker
     # must not undo that, so the stack idles at ~0 MB for the runtime.

@@ -206,16 +206,24 @@ docker compose ps
 ```
 
 `docker compose up -d` собирает образ `yomibako:latest` из `proxy-go/Dockerfile` и запускает
-`miwayomi`; порт `7345` публикуется только на loopback. Образ miwayomi берётся из
-`MIWAYOMI_IMAGE` (`ghcr.io/miwayomi/miwayomi:latest`), а если реестр его не отдаёт — Compose
-собирает его из `MIWAYOMI_BUILD_CONTEXT` (`https://github.com/miwayomi/miwayomi.git#main`).
-Сборка upstream — это Gradle и несколько минут, поэтому для повторных деплоев лучше один раз
-собрать и сохранить образ самому:
+`miwayomi`; порт `7345` публикуется только на loopback.
+
+**Версия miwayomi зафиксирована.** `MIWAYOMI_IMAGE` и `MIWAYOMI_BUILD_CONTEXT` по умолчанию
+указывают на один и тот же релиз (`0.2.9` / тег `v0.2.9`, коммит `bf18765`), так что пересборка
+не подтянет молча новый `main`. Если реестр не отдаёт образ, Compose собирает его из этого
+upstream-тега (Gradle, несколько минут). Для продакшена соберите образ один раз, положите в свой
+registry и работайте по immutable-тегу:
 
 ```bash
-docker compose build miwayomi      # один раз
+docker compose build miwayomi                                              # один раз
+docker tag ghcr.io/miwayomi/miwayomi:0.2.9 ghcr.io/<you>/miwayomi:0.2.9-1
+docker push ghcr.io/<you>/miwayomi:0.2.9-1
+# в .env: MIWAYOMI_IMAGE=ghcr.io/<you>/miwayomi:0.2.9-1
 docker compose up -d
 ```
+
+При обновлении miwayomi меняйте оба значения вместе (образ и build context) и проверяйте, что
+`/health` и `/api/v1/sources` отвечают как раньше: Yomibako завязан на этот REST API.
 
 ### Важные переменные
 
@@ -226,7 +234,7 @@ docker compose up -d
 | `MIWAYOMI_URL` | адрес API miwayomi из контейнера (`http://miwayomi:4567`) |
 | `YOMIBAKO_HOST`, `YOMIBAKO_PORT` | адрес прослушивания (в образе уже `0.0.0.0:7345`) |
 | `YOMIBAKO_CONFIG` | путь к своему конфигу вместо `/etc/yomibako/config.json` |
-| `MIWAYOMI_IMAGE`, `MIWAYOMI_BUILD_CONTEXT` | откуда брать образ miwayomi |
+| `MIWAYOMI_IMAGE`, `MIWAYOMI_BUILD_CONTEXT` | образ miwayomi и upstream-тег для fallback-сборки (оба зафиксированы на `0.2.9`) |
 | `FLARESOLVERR_URL` | внутри сервиса miwayomi; пусто — Cloudflare не решается |
 
 Свой конфиг подключается монтированием; рядом можно положить `cookies.txt` для LNReader:
@@ -303,8 +311,12 @@ CI (`.github/workflows/ci.yml`) прогоняет `gofmt`, `go vet`, `go test`,
   останавливать любые контейнеры, а не только `miwayomi`. Альтернатива — запускать Yomibako на
   хосте и не монтировать сокет.
 - **Образ miwayomi не гарантированно доступен в реестре.** Compose умеет собрать его из
-  upstream-репозитория (`MIWAYOMI_BUILD_CONTEXT`), но это долгая Gradle-сборка; для продакшена
-  лучше один раз собрать и хранить свой образ.
+  upstream-репозитория (`MIWAYOMI_BUILD_CONTEXT`, зафиксирован на `v0.2.9`), но это долгая
+  Gradle-сборка; для продакшена лучше один раз собрать и хранить свой образ по immutable-тегу.
+- **Yomibako завязан на REST API miwayomi.** Эндпойнты `/api/v1/sources`, `/manga/{id}/search`,
+  `/chapters`, `/pages`, `/proxy` и форматы ответов могут измениться в новом релизе miwayomi
+  (или не совпасть с Suwayomi — у него другой API). После обновления проверяйте `/health` и
+  один тестовый поиск.
 - **Состояние не переносится между перезапусками.** Задания на скачивание живут в памяти, файлы —
   во временном каталоге контейнера с TTL (`fileTtlMinutes`): после рестарта незавершённые загрузки
   теряются, а готовые надо запрашивать заново. Сами тайтлы BookOrbit забирает сразу.
