@@ -7,9 +7,14 @@ name: yomibako
 
 services:
   yomibako:
-    build:
-      context: ./proxy-go
-    image: yomibako:latest
+    # Published by .github/workflows/release.yml on every push to main and on v* tags.
+    # Pin it (`YOMIBAKO_IMAGE=ghcr.io/mimic890/yomibako:0.1.0`) instead of :latest if
+    # you want reproducible redeploys. Make the package public once, otherwise the
+    # pull needs `docker login ghcr.io`.
+    image: ${YOMIBAKO_IMAGE:-ghcr.io/mimic890/yomibako:latest}
+    # Fallback: build locally instead of pulling, then `docker compose build yomibako`.
+    # build:
+    #   context: ./proxy-go
     container_name: yomibako
     restart: unless-stopped
     ports:

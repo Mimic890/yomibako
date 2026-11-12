@@ -21,33 +21,26 @@ Yomibako — имя сервиса, а «runtime proxy» — описание е
 HTTP-сервис на `127.0.0.1:7345`, внутри которого живут два рантайма, выключенные, пока к ним не
 обратятся.
 
-## Что внутри
+## Установка
 
-| Путь | Что это |
-|---|---|
-| `proxy-go/` | Yomibako на Go 1.27: HTTP-сервис, рантаймы, CBZ через `archive/zip` |
-| `proxy-go/Dockerfile` | образ Yomibako: статический бинарник + Docker CLI + `@lnreader/cli` |
-| `proxy-go/config.docker.json` | конфиг внутри образа (`0.0.0.0:7345`, `http://miwayomi:4567`) |
-| `compose.yml` | стек из двух сервисов: `yomibako` и `miwayomi` |
-| `plugins/mihon/index.mjs` | BookOrbit indexer plugin для Mihon-источников |
-| `plugins/lnreader/index.mjs` | BookOrbit indexer plugin для LNReader-источников |
-| `.github/workflows/ci.yml` | CI: `go test`, `docker compose config`, сборка образа |
-| `proxy/server.mjs` | Node-версия HTTP-сервиса (оставлена как альтернатива) |
-| `proxy/runtimes/mihon.mjs` | старт/стоп контейнера miwayomi, поиск, сборка CBZ |
-| `proxy/runtimes/lnreader.mjs` | вызов `@lnreader/cli` на поиск и скачивание EPUB |
-| `proxy/zip.mjs` | потоковый ZIP без зависимостей (CBZ) |
+Три шага: поднять сервис, положить плагины в BookOrbit, добавить источники. Всё остальное —
+ниже.
 
-У Yomibako нет внешних Go-зависимостей: только стандартная библиотека, поэтому в `proxy-go/`
-нет и `go.sum` — он появится, как только добавится хотя бы один модуль (`go mod tidy`). Старая
-Node-версия требует Node.js 22+.
-
-## Быстрый старт: docker compose
+### 1. Запустить сервис
 
 ```bash
 cp .env.example .env          # задать YOMIBAKO_TOKEN и DOCKER_GID
-docker compose up -d          # соберёт yomibako, поднимет miwayomi
+docker compose up -d          # тянет ghcr.io/mimic890/yomibako:latest и поднимает miwayomi
 curl -s http://127.0.0.1:7345/health
 ```
+
+`DOCKER_GID` — GID владельца `/var/run/docker.sock` (`stat -c '%g' /var/run/docker.sock`), без
+него Yomibako не сможет запускать miwayomi. `YOMIBAKO_TOKEN` можно оставить пустым, пока сервис
+не выходит за пределы localhost.
+
+Образ `yomibako` публикуется из этого репозитория в GHCR. Если реестр недоступен, раскомментируйте
+`build:` у сервиса `yomibako` в `compose.yml` и соберите локально: `docker compose build yomibako`.
+Подробности — в разделе «Деплой».
 
 Что произойдёт:
 
@@ -60,13 +53,13 @@ curl -s http://127.0.0.1:7345/health
 Запускайте `up -d` без имён сервисов: контейнер `miwayomi` должен существовать, иначе Yomibako
 нечего будет останавливать и запускать.
 
-Дальше:
+Перед добавлением источников нужен хотя бы один установленный рантайм:
 
-- **Mihon-рантайм.** Открыть WebUI miwayomi на `http://127.0.0.1:4567`, добавить репозиторий
-  Keiyoushi и установить нужные расширения (например MangaLib и HentaiLib). Список источников
-  Yomibako кеширует на 5 минут и обновляет его при промахе, поэтому перезапуск после установки
-  расширения не нужен.
-- **LNReader-рантайм.** CLI уже внутри образа:
+- **Mihon.** Открыть WebUI miwayomi на `http://127.0.0.1:4567`, добавить репозиторий Keiyoushi и
+  установить нужные расширения (например MangaLib и HentaiLib). Имя источника из WebUI потом
+  указывается в настройках indexer'а. Список источников Yomibako кеширует на 5 минут и
+  обновляет его при промахе, поэтому перезапуск после установки расширения не нужен.
+- **LNReader.** CLI уже внутри образа:
 
   ```bash
   docker compose exec yomibako lnreader plugins list   # проверить, что RLIB на месте
@@ -83,33 +76,26 @@ curl -s http://127.0.0.1:7345/health
     `config.json` и указать `lnreader.cookies` (см. «Конфиг»);
   - либо выполнить `lnreader --home <путь-к-тому> auth RLIB` на машине с браузером, смонтировав
     туда тот же каталог, что и том `lnreader-home`.
-- **Плагины BookOrbit.** Скопировать каталоги:
 
-  ```
-  <APP_DATA_PATH>/plugins/indexers/mihon-runtime/index.mjs
-  <APP_DATA_PATH>/plugins/indexers/lnreader-runtime/index.mjs
-  ```
+### 2. Установить плагины в BookOrbit
 
-  Перезапустить BookOrbit и добавить источники, как описано ниже.
+Скопировать в каталог данных BookOrbit (`<APP_DATA_PATH>`, тот, где лежат его конфиг и БД):
 
-### Локальный запуск без Docker
-
-```bash
-cd proxy-go
-cp config.example.json config.json    # host 127.0.0.1, port 7345, baseUrl 127.0.0.1:4567
-go run .
+```
+<APP_DATA_PATH>/plugins/indexers/mihon-runtime/index.mjs
+<APP_DATA_PATH>/plugins/indexers/lnreader-runtime/index.mjs
 ```
 
-miwayomi при этом поднимается отдельно (свой `docker compose up -d miwayomi` или образ
-`ghcr.io/miwayomi/miwayomi`), а `lnreader` должен быть в `PATH`:
+| Файл в этом репозитории | Куда | Тип indexer'а |
+|---|---|---|
+| `plugins/mihon/index.mjs` | `<APP_DATA_PATH>/plugins/indexers/mihon-runtime/index.mjs` | `mihon-runtime` |
+| `plugins/lnreader/index.mjs` | `<APP_DATA_PATH>/plugins/indexers/lnreader-runtime/index.mjs` | `lnreader-runtime` |
 
-```bash
-npm i -g @lnreader/cli
-```
+Перезапустить BookOrbit: плагины читаются на старте. Оба файла — самодостаточные ES-модули без
+зависимостей, ставятся копированием; каталог `proxy-go/` рядом с BookOrbit не нужен, он живёт в
+контейнере.
 
-Старая Node-версия (альтернатива): `cp proxy/config.example.json proxy/config.json && node proxy/server.mjs`.
-
-## Подключение источника в BookOrbit
+### 3. Добавить источники в BookOrbit
 
 BookOrbit ничего не знает про источники сам по себе: **один indexer = один источник**. Для
 MangaLib и для RLIB это две отдельные записи.
@@ -151,6 +137,46 @@ Allow private addresses: on
   (для LNReader — что CLI доступен).
 - Ошибки BookOrbit показываются как `unauthorized`, `timeout`, `unreachable` или текст `{error}`,
   который вернул Yomibako.
+
+## Что внутри
+
+| Путь | Что это |
+|---|---|
+| `proxy-go/` | Yomibako на Go 1.27: HTTP-сервис, рантаймы, CBZ через `archive/zip` |
+| `proxy-go/Dockerfile` | образ Yomibako: статический бинарник + Docker CLI + `@lnreader/cli` |
+| `proxy-go/config.docker.json` | конфиг внутри образа (`0.0.0.0:7345`, `http://miwayomi:4567`) |
+| `compose.yml` | стек из двух сервисов: `yomibako` (готовый образ) и `miwayomi` |
+| `plugins/mihon/index.mjs` | BookOrbit indexer plugin для Mihon-источников |
+| `plugins/lnreader/index.mjs` | BookOrbit indexer plugin для LNReader-источников |
+| `.github/workflows/ci.yml` | CI: `go test`, `docker compose config`, сборка образа |
+| `.github/workflows/release.yml` | публикация образа в `ghcr.io/mimic890/yomibako` |
+| `.env.example` | шаблон `.env`: `YOMIBAKO_TOKEN` и `DOCKER_GID` |
+| `proxy/server.mjs` | Node-версия HTTP-сервиса (оставлена как альтернатива) |
+| `proxy/runtimes/mihon.mjs` | старт/стоп контейнера miwayomi, поиск, сборка CBZ |
+| `proxy/runtimes/lnreader.mjs` | вызов `@lnreader/cli` на поиск и скачивание EPUB |
+| `proxy/zip.mjs` | потоковый ZIP без зависимостей (CBZ) |
+
+У Yomibako нет внешних Go-зависимостей: только стандартная библиотека, поэтому в `proxy-go/`
+нет и `go.sum` — он появится, как только добавится хотя бы один модуль (`go mod tidy`). Старая
+Node-версия требует Node.js 22+.
+
+
+## Локальный запуск без Docker
+
+```bash
+cd proxy-go
+cp config.example.json config.json    # host 127.0.0.1, port 7345, baseUrl 127.0.0.1:4567
+go run .
+```
+
+miwayomi при этом поднимается отдельно (`docker compose up -d miwayomi`), а `lnreader`
+должен быть в `PATH`:
+
+```bash
+npm i -g @lnreader/cli
+```
+
+Старая Node-версия (альтернатива): `cp proxy/config.example.json proxy/config.json && node proxy/server.mjs`.
 
 ## API Yomibako
 
@@ -205,8 +231,28 @@ docker compose up -d
 docker compose ps
 ```
 
-`docker compose up -d` собирает образ `yomibako:latest` из `proxy-go/Dockerfile` и запускает
+`docker compose up -d` забирает готовый образ `ghcr.io/mimic890/yomibako:latest` и запускает
 `miwayomi`; порт `7345` публикуется только на loopback.
+
+### Образ Yomibako
+
+Образ собирается и публикуется в GHCR workflow `.github/workflows/release.yml`:
+
+| Событие | Теги |
+|---|---|
+| push в `main` | `latest`, `sha-<commit>` |
+| тег `v1.2.3` | `1.2.3`, `1.2`, `sha-<commit>` |
+| ручной запуск | те же, что для ветки/тега |
+
+Оттуда же берётся архитектура: `linux/amd64` и `linux/arm64`.
+
+- **Пакет должен быть публичным**, иначе `docker compose up -d` на чужой машине получит
+  `unauthorized`. Один раз после первого релиза: GitHub → Packages → `yomibako` → Package settings
+  → Change visibility → Public. Иначе нужен `docker login ghcr.io` на целевой машине.
+- **Пиннинг:** `YOMIBAKO_IMAGE=ghcr.io/mimic890/yomibako:0.1.0` в `.env` вместо `:latest`, если
+  нужны воспроизводимые передеплои.
+- **Сборка на месте** (без реестра): раскомментировать `build:` у сервиса `yomibako` в `compose.yml`
+  и выполнить `docker compose build yomibako` — дальше `up -d` возьмёт локальный образ.
 
 **Версия miwayomi зафиксирована.** `MIWAYOMI_IMAGE` и `MIWAYOMI_BUILD_CONTEXT` по умолчанию
 указывают на один и тот же релиз (`0.2.9` / тег `v0.2.9`, коммит `bf18765`), так что пересборка
@@ -234,6 +280,7 @@ docker compose up -d
 | `MIWAYOMI_URL` | адрес API miwayomi из контейнера (`http://miwayomi:4567`) |
 | `YOMIBAKO_HOST`, `YOMIBAKO_PORT` | адрес прослушивания (в образе уже `0.0.0.0:7345`) |
 | `YOMIBAKO_CONFIG` | путь к своему конфигу вместо `/etc/yomibako/config.json` |
+| `YOMIBAKO_IMAGE` | образ Yomibako; по умолчанию `ghcr.io/mimic890/yomibako:latest` |
 | `MIWAYOMI_IMAGE`, `MIWAYOMI_BUILD_CONTEXT` | образ miwayomi и upstream-тег для fallback-сборки (оба зафиксированы на `0.2.9`) |
 | `FLARESOLVERR_URL` | внутри сервиса miwayomi; пусто — Cloudflare не решается |
 
@@ -282,11 +329,12 @@ docker compose logs -f yomibako
 (cd proxy-go && go vet ./... && go test ./... && go build -o yomibako .)
 node proxy/selfcheck.mjs         # старая Node-версия: ZIP/CRC, имена и контракт плагинов
 docker compose config --quiet    # синтаксис compose
-docker compose build yomibako    # сборка образа
+docker build -t yomibako:local proxy-go   # сборка образа без compose
 ```
 
-CI (`.github/workflows/ci.yml`) прогоняет `gofmt`, `go vet`, `go test`, `go build`,
-`node proxy/selfcheck.mjs`, `docker compose config` и сборку образа.
+CI (`.github/workflows/ci.yml`) прогоняет `gofmt`, `go vet`, `go mod tidy -diff`, `go test`,
+`go build`, `node proxy/selfcheck.mjs`, `docker compose config` и сборку образа.
+Release (`.github/workflows/release.yml`) повторяет `go vet`/`go test` и публикует образ в GHCR.
 
 ## Ограничения и риски
 
@@ -310,6 +358,8 @@ CI (`.github/workflows/ci.yml`) прогоняет `gofmt`, `go vet`, `go test`,
 - **Docker-сокет в контейнере** даёт Yomibako права уровня root на хосте: он может запускать и
   останавливать любые контейнеры, а не только `miwayomi`. Альтернатива — запускать Yomibako на
   хосте и не монтировать сокет.
+- **Пакет GHCR по умолчанию приватный.** Пока видимость не переключена на Public (или на машине
+  нет `docker login ghcr.io`), `docker compose up -d` не сможет забрать `yomibako`.
 - **Образ miwayomi не гарантированно доступен в реестре.** Compose умеет собрать его из
   upstream-репозитория (`MIWAYOMI_BUILD_CONTEXT`, зафиксирован на `v0.2.9`), но это долгая
   Gradle-сборка; для продакшена лучше один раз собрать и хранить свой образ по immutable-тегу.
