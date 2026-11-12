@@ -1,0 +1,15 @@
+# Local configuration and downloaded files
+proxy/config.json
+proxy/data/
+proxy-go/config.json
+
+# Go build and test output
+proxy-go/yomibako
+*.test
+*.out
+
+# Node
+node_modules/
+
+# OS/editor
+.DS_Store

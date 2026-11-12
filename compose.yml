@@ -1,0 +1,19 @@
+# The Mihon side of the proxy. The proxy starts and stops this container on demand, so it is
+# created here but deliberately not restarted by Docker: an idle stack should cost no memory.
+services:
+  miwayomi:
+    image: ghcr.io/miwayomi/miwayomi:latest
+    container_name: miwayomi
+    restart: "no"
+    ports:
+      - "127.0.0.1:4567:4567"
+    environment:
+      JAVA_OPTS: -Xmx512m -Xms64m -XX:MaxMetaspaceSize=256m -XX:+UseSerialGC
+      # Point this at a FlareSolverr instance if one is needed; empty disables solving.
+      FLARESOLVERR_URL: ""
+    volumes:
+      - miwayomi-data:/data
+    mem_limit: 768m
+
+volumes:
+  miwayomi-data:

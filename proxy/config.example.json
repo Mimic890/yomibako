@@ -1,0 +1,21 @@
+{
+  "host": "127.0.0.1",
+  "port": 7345,
+  "token": "",
+  "fileTtlMinutes": 60,
+  "mihon": {
+    "enabled": true,
+    "container": "miwayomi",
+    "baseUrl": "http://127.0.0.1:4567",
+    "startTimeoutMs": 30000,
+    "idleMinutes": 10,
+    "imageConcurrency": 4,
+    "maxChapters": 0
+  },
+  "lnreader": {
+    "enabled": true,
+    "command": "lnreader",
+    "home": "",
+    "concurrency": 2
+  }
+}
