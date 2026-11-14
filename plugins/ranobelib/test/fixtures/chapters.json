@@ -1,0 +1,96 @@
+{
+  "data": [
+    {
+      "id": 202,
+      "index": 2,
+      "item_number": 2,
+      "volume": "1",
+      "number": "2",
+      "number_secondary": "1",
+      "name": "Вторая глава",
+      "branches_count": 1,
+      "branches": [
+        {
+          "id": 22,
+          "branch_id": null,
+          "created_at": "2024-05-02T10:00:00.000000Z",
+          "teams": [{ "id": 1, "name": "Основная команда" }],
+          "expired_type": 0,
+          "user": { "username": "user-a", "id": 1 }
+        }
+      ],
+      "bundle_id": null
+    },
+    {
+      "id": 201,
+      "index": 1,
+      "item_number": 1,
+      "volume": "1",
+      "number": "1",
+      "number_secondary": "1",
+      "name": "Первая глава",
+      "branches_count": 3,
+      "branches": [
+        {
+          "id": 11,
+          "branch_id": null,
+          "created_at": "2024-05-01T10:00:00.000000Z",
+          "teams": [{ "id": 1, "name": "Основная команда" }],
+          "expired_type": 0,
+          "user": { "username": "user-a", "id": 1 }
+        },
+        {
+          "id": 12,
+          "branch_id": 7,
+          "created_at": "2024-05-01T11:00:00.000000Z",
+          "teams": [{ "id": 2, "name": "Альтернативная команда" }],
+          "expired_type": 0,
+          "user": { "username": "user-b", "id": 2 }
+        }
+      ],
+      "bundle_id": null
+    },
+    {
+      "id": 203,
+      "index": 1.5,
+      "item_number": 3,
+      "volume": "1",
+      "number": "1.5",
+      "number_secondary": "1",
+      "name": "Полторы главы",
+      "branches_count": 1,
+      "branches": [
+        {
+          "id": 13,
+          "branch_id": 7,
+          "created_at": "2024-05-01T12:00:00.000000Z",
+          "teams": [{ "id": 2, "name": "Альтернативная команда" }],
+          "expired_type": 0,
+          "user": { "username": "user-b", "id": 2 }
+        }
+      ],
+      "bundle_id": null
+    },
+    {
+      "id": 204,
+      "index": 1,
+      "item_number": 1,
+      "volume": "1",
+      "number": "1",
+      "number_secondary": "1",
+      "name": "Первая глава",
+      "branches_count": 1,
+      "branches": [
+        {
+          "id": 14,
+          "branch_id": 8,
+          "created_at": "2024-05-01T13:00:00.000000Z",
+          "teams": [{ "id": 3, "name": "Третья команда" }],
+          "expired_type": 0,
+          "user": { "username": "user-c", "id": 3 }
+        }
+      ],
+      "bundle_id": null
+    }
+  ]
+}

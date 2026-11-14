@@ -1,0 +1,65 @@
+{
+  "data": [
+    {
+      "id": 101,
+      "name": "Test Novel",
+      "rus_name": "Тестовый тайтл",
+      "eng_name": "Test Novel",
+      "model": "manga",
+      "slug": "test-novel",
+      "slug_url": "101--test-novel",
+      "cover": {
+        "filename": "cover-101",
+        "thumbnail": "https://cdn.example.invalid/covers/101-thumb.png",
+        "default": "https://cdn.example.invalid/covers/101.png",
+        "md": "https://cdn.example.invalid/covers/101.png"
+      },
+      "ageRestriction": { "id": 2, "label": "16+" },
+      "site": 3,
+      "type": { "id": 10, "label": "Япония" },
+      "rating": { "average": "8.5", "averageFormated": "8.5", "votes": 42, "votesFormated": "42", "user": 0 },
+      "is_licensed": false,
+      "status": { "id": 2, "label": "Завершён" },
+      "scanlateStatus": { "id": 2, "label": "Завершен" },
+      "releaseDateString": "2024"
+    },
+    {
+      "id": 102,
+      "name": "Second Test Novel",
+      "rus_name": "Второй тестовый тайтл",
+      "eng_name": "",
+      "model": "manga",
+      "slug": "second-test-novel",
+      "slug_url": "102--second-test-novel",
+      "cover": {
+        "filename": "cover-102",
+        "thumbnail": "https://cdn.example.invalid/covers/102-thumb.png",
+        "default": "https://cdn.example.invalid/covers/102.png",
+        "md": "https://cdn.example.invalid/covers/102.png"
+      },
+      "ageRestriction": { "id": 1, "label": "6+" },
+      "site": 3,
+      "type": { "id": 11, "label": "Корея" },
+      "rating": { "average": "7.0", "averageFormated": "7.0", "votes": 5, "votesFormated": "5", "user": 0 },
+      "is_licensed": true,
+      "status": { "id": 1, "label": "Онгоинг" },
+      "scanlateStatus": { "id": 1, "label": "Продолжается" },
+      "releaseDateString": "2025"
+    }
+  ],
+  "links": {
+    "first": "https://api.example.invalid/api/manga?page=1",
+    "last": null,
+    "prev": null,
+    "next": "https://api.example.invalid/api/manga?page=2"
+  },
+  "meta": {
+    "current_page": 1,
+    "from": 1,
+    "path": "https://api.example.invalid/api/manga",
+    "per_page": 60,
+    "to": 2,
+    "page": 1,
+    "has_next_page": true
+  }
+}

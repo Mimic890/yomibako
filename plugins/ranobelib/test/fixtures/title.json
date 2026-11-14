@@ -1,0 +1,62 @@
+{
+  "data": {
+    "id": 101,
+    "name": "Test Novel",
+    "rus_name": "Тестовый тайтл",
+    "eng_name": "Test Novel",
+    "model": "manga",
+    "slug": "test-novel",
+    "slug_url": "101--test-novel",
+    "cover": {
+      "filename": "cover-101",
+      "thumbnail": "https://cdn.example.invalid/covers/101-thumb.png",
+      "default": "https://cdn.example.invalid/covers/101.png",
+      "md": "https://cdn.example.invalid/covers/101.png"
+    },
+    "ageRestriction": { "id": 2, "label": "16+" },
+    "site": 3,
+    "type": { "id": 10, "label": "Япония" },
+    "rating": { "average": "8.5", "votes": 42, "user": 0 },
+    "is_licensed": false,
+    "summary": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            { "type": "text", "text": "Первое описание тестового тайтла с <угловыми> скобками и & амперсандом." }
+          ]
+        },
+        {
+          "type": "paragraph",
+          "content": [
+            { "type": "text", "text": "Второй абзац описания." }
+          ]
+        }
+      ]
+    },
+    "teams": [
+      { "id": 1, "name": "Основная команда", "details": { "branch_id": 0 } },
+      { "id": 2, "name": "Альтернативная команда", "details": { "branch_id": 7 } }
+    ],
+    "genres": [
+      { "id": 51, "name": "Научная фантастика", "adult": false, "alert": false },
+      { "id": 54, "name": "Приключения", "adult": false, "alert": false }
+    ],
+    "tags": [
+      { "id": 295, "name": "ГГ мужчина", "adult": false, "alert": false },
+      { "id": 345, "name": "Машинный перевод", "adult": false, "alert": false }
+    ],
+    "authors": [
+      { "id": 11, "name": "Тестовый автор", "slug": "test-author" }
+    ],
+    "artists": [
+      { "id": 12, "name": "Тестовый художник", "slug": "test-artist" }
+    ],
+    "status": { "id": 2, "label": "Завершён" },
+    "scanlateStatus": { "id": 4, "label": "Заброшен" },
+    "edition": null,
+    "releaseDateString": "2024-05-01"
+  },
+  "meta": { "country": "XX" }
+}

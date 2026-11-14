@@ -1,0 +1,17 @@
+{
+  "name": "yomibako",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Isolated RanobeLib module for BookOrbit, pending a generated-file plugin API",
+  "license": "AGPL-3.0-or-later",
+  "scripts": {
+    "test": "node --test plugins/ranobelib/test/*.test.mjs",
+    "test:epubcheck": "node --test plugins/ranobelib/test/epub.test.mjs",
+    "sample:epub": "node plugins/ranobelib/scripts/build-sample.mjs",
+    "check": "node --check plugins/ranobelib/src/*.mjs && node --check plugins/ranobelib/test/*.mjs && node --check plugins/ranobelib/test/helpers/*.mjs && node --check plugins/ranobelib/scripts/*.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

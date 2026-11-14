@@ -1,14 +1,3 @@
-# Local configuration and downloaded files
-proxy/config.json
-proxy/data/
-proxy-go/config.json
-.env
-
-# Go build and test output
-proxy-go/yomibako
-*.test
-*.out
-
 # Editor
 .idea/
 .vscode/
@@ -16,5 +5,18 @@ proxy-go/yomibako
 # Node
 node_modules/
 
+# Не коммитить локальные секреты и данные BookOrbit
+.env
+.env.local
+*.secret
+
+# Сгенерированные книги и временные проверки
+tmp/
+*.epub
+
 # OS/editor
 .DS_Store
+
+# Тестовый вывод
+*.test
+*.out

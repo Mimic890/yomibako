@@ -1,0 +1,72 @@
+{
+  "data": {
+    "id": 201,
+    "volume": "1",
+    "number": "1",
+    "name": "Первая глава",
+    "content": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "heading",
+          "attrs": { "level": 1 },
+          "content": [{ "type": "text", "text": "Заголовок главы" }]
+        },
+        {
+          "type": "paragraph",
+          "content": [
+            { "type": "text", "text": "Текст с <опасными> скобками и & амперсандом.\nВторая строка." }
+          ]
+        },
+        {
+          "type": "paragraph",
+          "content": [
+            { "type": "text", "text": "Обычный " },
+            { "type": "bold", "content": [{ "type": "text", "text": "жирный" }] },
+            { "type": "text", "text": " и " },
+            { "type": "italic", "content": [{ "type": "text", "text": "курсив" }] },
+            { "type": "text", "text": "." }
+          ]
+        },
+        {
+          "type": "blockquote",
+          "content": [
+            { "type": "paragraph", "content": [{ "type": "text", "text": "Цитата." }] }
+          ]
+        },
+        {
+          "type": "bulletList",
+          "content": [
+            { "type": "listItem", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Пункт один" }] }] },
+            { "type": "listItem", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Пункт два" }] }] }
+          ]
+        },
+        {
+          "type": "image",
+          "attrs": {
+            "images": [{ "image": "img-1" }],
+            "alt": "Иллюстрация"
+          }
+        },
+        { "type": "horizontalRule" },
+        {
+          "type": "paragraph",
+          "content": [
+            { "type": "link", "attrs": { "href": "https://example.invalid/source" }, "content": [{ "type": "text", "text": "Ссылка" }] }
+          ]
+        }
+      ]
+    },
+    "attachments": [
+      {
+        "id": "img-1",
+        "name": "img-1",
+        "filename": "img-1.png",
+        "extension": "png",
+        "url": "https://cdn.example.invalid/chapters/img-1.png",
+        "width": 80,
+        "height": 60
+      }
+    ]
+  }
+}
