@@ -407,10 +407,16 @@ func (b *Bot) showVolumes(ctx context.Context, chatID int64, slug string) {
 		TotalChapters: len(chapters),
 		TotalVolumes:  len(volumes),
 	})
+	// Only volumes that are actually on disk get a tick: a volume marked missing was deleted from
+	// the library and can be built again.
 	known := map[string]string{}
 	if err == nil {
 		if labels, err := b.st.VolumeLabels(ctx, titleID); err == nil {
-			known = labels
+			for label, status := range labels {
+				if status != store.StatusMissing {
+					known[label] = status
+				}
+			}
 		}
 	}
 
