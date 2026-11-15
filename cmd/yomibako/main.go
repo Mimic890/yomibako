@@ -27,7 +27,11 @@ const usage = `yomibako - загрузка тайтлов в EPUB
   yomibako search <запрос> [-n 10] [-p 1]
   yomibako info <slug|ссылка>
   yomibako volumes <slug|ссылка>
-  yomibako add <slug|ссылка> [--volume 1,2 | --all] [--out DIR] [--no-images] [--limit N]
+  yomibako add <slug|ссылка> [--volume 1,2 | --all] [--out DIR] [--dock DIR] [--wait]
+  yomibako list
+  yomibako subscribe <slug|ссылка> [--interval 24]
+  yomibako unsubscribe <slug|ссылка>
+  yomibako check
 
 Флаги:
   -c, --config PATH   файл конфигурации (по умолчанию yomibako.yml)
@@ -64,6 +68,14 @@ func run(args []string) error {
 		return runVolumes(rest)
 	case "add":
 		return runAdd(rest)
+	case "list":
+		return runList(rest)
+	case "subscribe":
+		return runSubscribe(rest)
+	case "unsubscribe":
+		return runUnsubscribe(rest)
+	case "check":
+		return runCheck(rest)
 	default:
 		return fmt.Errorf("неизвестная команда %q (см. yomibako help)", command)
 	}
@@ -303,6 +315,12 @@ func runAdd(args []string) error {
 	if err != nil {
 		return err
 	}
+	st, err := openStore(cfg)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
 	ctx, cancel := contextWithSignals()
 	defer cancel()
 
@@ -320,6 +338,11 @@ func runAdd(args []string) error {
 	}
 
 	selected, err := selectVolumes(volumes, *volumeList, *all)
+	if err != nil {
+		return err
+	}
+
+	titleID, err := recordTitle(ctx, st, src, title, len(chapters), len(volumes))
 	if err != nil {
 		return err
 	}
@@ -383,10 +406,16 @@ func runAdd(args []string) error {
 			fmt.Fprintln(os.Stderr, "  предупреждение:", warning)
 		}
 		fmt.Println("  ->", path)
+
+		imported := false
 		if cfg.BookDock != "" && c.wait {
 			if err := waitForDock(ctx, path); err != nil {
 				return err
 			}
+			imported = true
+		}
+		if err := recordVolume(ctx, st, titleID, volume, path, len(result.Bytes), imported); err != nil {
+			return err
 		}
 	}
 	return nil

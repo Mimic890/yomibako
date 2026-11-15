@@ -9,6 +9,9 @@ request_interval: 600ms
 # Куда складывать готовые тома.
 output_dir: out
 
+# Файл базы: что скачано, подписки, время проверок.
+database: yomibako.db
+
 # Папка book-dock BookOrbit. Если задана, тома кладутся сразу туда и BookOrbit
 # импортирует их сам; output_dir тогда не используется.
 book_dock: ""

@@ -19,6 +19,7 @@ type Config struct {
 	RequestInterval Duration `yaml:"request_interval"`
 	OutputDir       string   `yaml:"output_dir"`
 	BookDock        string   `yaml:"book_dock"`
+	Database        string   `yaml:"database"`
 	UserAgent       string   `yaml:"user_agent"`
 	IncludeImages   *bool    `yaml:"include_images"`
 	Auth            Auth     `yaml:"auth"`
@@ -59,6 +60,7 @@ func Default() Config {
 		SiteID:          3,
 		RequestInterval: Duration(600 * time.Millisecond),
 		OutputDir:       "out",
+		Database:        "yomibako.db",
 	}
 }
 
@@ -103,6 +105,9 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.OutputDir == "" {
 		cfg.OutputDir = Default().OutputDir
+	}
+	if cfg.Database == "" {
+		cfg.Database = Default().Database
 	}
 	return cfg, nil
 }

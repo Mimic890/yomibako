@@ -40,6 +40,21 @@ yomibako add lord-of-the-mysteries --volume 1,2 --no-images --out /tmp/books
 yomibako add lord-of-the-mysteries --volume 1 --dock /srv/docker/bookorbit/data/state/book-dock --wait
 ```
 
+## База и подписки
+
+Сервис ведёт базу в SQLite: какие тайтлы добавлены, какие тома собраны и импортированы, на что
+оформлена подписка.
+
+```bash
+yomibako list                          # что уже в базе
+yomibako subscribe no-game-no-life-novel --interval 24
+yomibako check                         # есть ли новые тома
+yomibako unsubscribe no-game-no-life-novel
+```
+
+`check` сравнивает список томов на сайте с тем, что записано в базе, и печатает новые. Ничего
+не скачивает - сборка остаётся ручной.
+
 Если задан `book_dock` в конфиге или флаг `--dock`, тома кладутся прямо в папку BookOrbit:
 файл `<Название> - Том 01.epub`, дальше он сам читает метаданные и переносит книгу в библиотеку.
 `--wait` ждёт, пока BookOrbit заберёт файл.
