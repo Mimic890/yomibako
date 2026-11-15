@@ -17,6 +17,7 @@ import (
 
 	"github.com/Mimic890/yomibako/internal/build"
 	"github.com/Mimic890/yomibako/internal/config"
+	"github.com/Mimic890/yomibako/internal/logx"
 	"github.com/Mimic890/yomibako/internal/pipeline"
 	"github.com/Mimic890/yomibako/internal/source"
 	"github.com/Mimic890/yomibako/internal/sources/ranobelib"
@@ -123,6 +124,9 @@ func (c *common) load() (config.Config, *ranobelib.Source, error) {
 	}
 	if c.dock != "" {
 		cfg.BookDock = c.dock
+	}
+	if err := logx.SetLevel(cfg.LogLevel); err != nil {
+		return cfg, nil, err
 	}
 
 	client := ranobelib.NewClient()

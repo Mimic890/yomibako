@@ -9,6 +9,9 @@ request_interval: 600ms
 # Куда складывать готовые тома.
 output_dir: out
 
+# debug, info, warn, error
+log_level: info
+
 # Файл базы: что скачано, подписки, время проверок.
 database: yomibako.db
 

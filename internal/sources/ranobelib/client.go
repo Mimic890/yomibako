@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Mimic890/yomibako/internal/logx"
 )
 
 // Defaults for the public RanobeLib API.
@@ -139,11 +141,13 @@ func (c *Client) do(ctx context.Context, rawURL string) (*http.Response, error) 
 		req.Header.Set("Cookie", c.Cookies)
 	}
 
+	logx.Debugf("GET %s", rawURL)
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		return nil, &Error{Op: "request", URL: rawURL, Err: err}
 	}
 	if resp.StatusCode != http.StatusOK {
+		logx.Debugf("GET %s: HTTP %d", rawURL, resp.StatusCode)
 		io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
 		resp.Body.Close()
 		return nil, &Error{Op: "request", URL: rawURL, Status: resp.StatusCode}

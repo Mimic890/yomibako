@@ -20,6 +20,7 @@ type Config struct {
 	OutputDir       string   `yaml:"output_dir"`
 	BookDock        string   `yaml:"book_dock"`
 	Database        string   `yaml:"database"`
+	LogLevel        string   `yaml:"log_level"`
 	UserAgent       string   `yaml:"user_agent"`
 	IncludeImages   *bool    `yaml:"include_images"`
 	Auth            Auth     `yaml:"auth"`
@@ -68,6 +69,7 @@ func Default() Config {
 		RequestInterval: Duration(600 * time.Millisecond),
 		OutputDir:       "out",
 		Database:        "yomibako.db",
+		LogLevel:        "info",
 	}
 }
 
@@ -115,6 +117,9 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.Database == "" {
 		cfg.Database = Default().Database
+	}
+	if cfg.LogLevel == "" {
+		cfg.LogLevel = Default().LogLevel
 	}
 	return cfg, nil
 }

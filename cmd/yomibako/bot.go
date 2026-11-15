@@ -2,9 +2,9 @@ package main
 
 import (
 	"flag"
-	"fmt"
 
 	"github.com/Mimic890/yomibako/internal/bot"
+	"github.com/Mimic890/yomibako/internal/logx"
 )
 
 func runBot(args []string) error {
@@ -28,6 +28,6 @@ func runBot(args []string) error {
 	ctx, cancel := contextWithSignals()
 	defer cancel()
 
-	fmt.Println("бот запущен")
+	logx.Infof("конфиг: база %s, book-dock %s, уровень логов %s", cfg.Database, cfg.BookDock, cfg.LogLevel)
 	return bot.New(cfg, src, st).Run(ctx)
 }

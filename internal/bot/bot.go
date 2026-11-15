@@ -12,6 +12,7 @@ import (
 
 	"github.com/Mimic890/yomibako/internal/build"
 	"github.com/Mimic890/yomibako/internal/config"
+	"github.com/Mimic890/yomibako/internal/logx"
 	"github.com/Mimic890/yomibako/internal/pipeline"
 	"github.com/Mimic890/yomibako/internal/source"
 	"github.com/Mimic890/yomibako/internal/store"
@@ -72,7 +73,7 @@ func (b *Bot) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("telegram: токен не принят: %w", err)
 	}
-	fmt.Printf("бот @%s запущен\n", me.Username)
+	logx.Infof("бот @%s запущен, чат %d", me.Username, b.allowed)
 
 	_ = b.api.SetMyCommands(ctx, [][2]string{
 		{"list", "что уже в базе"},
@@ -93,7 +94,7 @@ func (b *Bot) Run(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return nil
 			}
-			fmt.Println("telegram:", err)
+			logx.Errorf("telegram: %v", err)
 			select {
 			case <-ctx.Done():
 				return nil
@@ -126,6 +127,7 @@ func (b *Bot) handle(ctx context.Context, message *telegram.Message) {
 		command = command[:index]
 	}
 	args := fields[1:]
+	logx.Infof("команда /%s, аргументов %d", command, len(args))
 
 	switch command {
 	case "start", "help":
@@ -149,7 +151,7 @@ func (b *Bot) handle(ctx context.Context, message *telegram.Message) {
 
 func (b *Bot) reply(ctx context.Context, chatID int64, text string) {
 	if _, err := b.api.SendMessage(ctx, chatID, text); err != nil {
-		fmt.Println("telegram:", err)
+		logx.Errorf("telegram: %v", err)
 	}
 }
 
@@ -211,6 +213,7 @@ func (b *Bot) check(ctx context.Context, chatID int64) {
 		return
 	}
 
+	logx.Infof("проверка подписок: %d", len(subscriptions))
 	var out strings.Builder
 	total := 0
 	for _, title := range subscriptions {
@@ -272,6 +275,7 @@ func (b *Bot) add(ctx context.Context, message *telegram.Message, args []string)
 		}
 	}
 
+	logx.Infof("в очередь: %s, тома %q, все %v", slug, volumes, all)
 	messageID, err := b.api.SendMessage(ctx, message.Chat.ID, "ставлю в очередь: "+html.EscapeString(slug))
 	if err != nil {
 		return
@@ -356,8 +360,10 @@ func (b *Bot) runJob(ctx context.Context, task job) {
 		_ = b.api.EditMessage(ctx, task.chatID, task.messageID, text)
 	}
 
+	logx.Infof("задача: %s", task.slug)
 	title, err := b.src.Title(ctx, task.slug)
 	if err != nil {
+		logx.Errorf("задача %s: %v", task.slug, err)
 		edit("не нашёл: " + html.EscapeString(err.Error()))
 		return
 	}
@@ -407,6 +413,7 @@ func (b *Bot) runJob(ctx context.Context, task job) {
 		edit(fmt.Sprintf("<b>%s</b>\n%s", html.EscapeString(title.Title), html.EscapeString(fmt.Sprintf(format, args...))))
 	}
 
+	logx.Infof("сборка «%s»: тома %s", title.Title, volumeLabels(selected))
 	results, err := pipeline.Run(ctx, pipeline.Options{
 		Source:        b.src,
 		Store:         b.st,
@@ -430,9 +437,20 @@ func (b *Bot) runJob(ctx context.Context, task job) {
 		}
 	}
 	if err != nil {
+		logx.Errorf("сборка «%s»: %v", title.Title, err)
 		fmt.Fprintf(&out, "\nошибка: %s", html.EscapeString(err.Error()))
+	} else {
+		logx.Infof("сборка «%s»: готово, томов %d", title.Title, len(results))
 	}
 	edit(out.String())
+}
+
+func volumeLabels(volumes []build.Volume) string {
+	labels := make([]string, 0, len(volumes))
+	for _, volume := range volumes {
+		labels = append(labels, volume.Label)
+	}
+	return strings.Join(labels, ",")
 }
 
 func selectVolumes(volumes []build.Volume, list string, all bool) ([]build.Volume, error) {

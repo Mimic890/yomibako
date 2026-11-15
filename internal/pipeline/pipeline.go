@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Mimic890/yomibako/internal/build"
+	"github.com/Mimic890/yomibako/internal/logx"
 	"github.com/Mimic890/yomibako/internal/source"
 	"github.com/Mimic890/yomibako/internal/store"
 )
@@ -86,6 +87,7 @@ func Run(ctx context.Context, opts Options) ([]Result, error) {
 			}
 		}
 
+		logx.Infof("том %s: готово, %s, %s", build.VolumeTitle(volume.Label), humanSize(len(built.Bytes)), time.Since(started).Round(time.Second))
 		results = append(results, Result{
 			Volume:   volume,
 			Path:     path,
@@ -137,6 +139,19 @@ func record(ctx context.Context, st *store.Store, titleID int64, volume build.Vo
 		BuiltAt:    time.Now(),
 		ImportedAt: importedAt,
 	})
+}
+
+func humanSize(bytes int) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d Б", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := int64(bytes) / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %s", float64(bytes)/float64(div), []string{"КБ", "МБ", "ГБ"}[exp])
 }
 
 // WaitForDock blocks until BookOrbit has taken the file out of the dock, which is what happens
