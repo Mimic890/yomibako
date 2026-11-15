@@ -74,6 +74,9 @@ func Run(ctx context.Context, opts Options) ([]Result, error) {
 		}
 
 		imported := false
+		if opts.Dock != "" && !opts.WaitForDock {
+			logx.Infof("том %s: лежит в book-dock, ждёт подтверждения", build.VolumeTitle(volume.Label))
+		}
 		if opts.Dock != "" && opts.WaitForDock {
 			if err := WaitForDock(ctx, path); err != nil {
 				return results, err

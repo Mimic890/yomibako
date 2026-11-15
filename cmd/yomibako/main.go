@@ -107,7 +107,7 @@ func (c *common) register(fs *flag.FlagSet) {
 	fs.StringVar(&c.token, "token", "", "access token RanobeLib")
 	fs.StringVar(&c.cookies, "cookies", "", "файл cookies.txt из браузера")
 	fs.StringVar(&c.dock, "dock", "", "папка book-dock BookOrbit")
-	fs.BoolVar(&c.wait, "wait", false, "дождаться, пока BookOrbit заберёт файл")
+	fs.BoolVar(&c.wait, "wait", false, "дождаться автофинализации (если она включена в BookOrbit)")
 }
 
 func (c *common) load() (config.Config, *ranobelib.Source, error) {

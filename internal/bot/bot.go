@@ -423,7 +423,7 @@ func (b *Bot) runJob(ctx context.Context, task job) {
 		Covers:        covers,
 		Dock:          b.cfg.BookDock,
 		IncludeImages: b.cfg.ImagesEnabled(),
-		WaitForDock:   true,
+		WaitForDock:   false,
 		Progress:      progress,
 	})
 
@@ -434,6 +434,8 @@ func (b *Bot) runJob(ctx context.Context, task job) {
 			len(result.Volume.Chapters), humanSize(result.Size))
 		if result.Imported {
 			out.WriteString("  импортирован в BookOrbit\n")
+		} else {
+			out.WriteString("  в book-dock, ждёт подтверждения\n")
 		}
 	}
 	if err != nil {
