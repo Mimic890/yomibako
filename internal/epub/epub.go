@@ -335,7 +335,10 @@ func writeZip(entries []entry, modified time.Time) ([]byte, error) {
 
 		header := &zip.FileHeader{Name: item.path, Method: zip.Deflate, Modified: modified}
 		if item.store {
+			// The mimetype entry must be stored and must not carry an extended-timestamp extra
+			// field: EPUB requires the first entry to be exactly "mimetype" + its 20 bytes.
 			header.Method = zip.Store
+			header.Modified = time.Time{}
 		}
 		file, err := writer.CreateHeader(header)
 		if err != nil {

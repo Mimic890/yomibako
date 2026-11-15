@@ -78,6 +78,9 @@ func TestBuildWritesMimetypeFirstAndStored(t *testing.T) {
 	if first.Method != zip.Store {
 		t.Fatalf("mimetype is compressed (method %d)", first.Method)
 	}
+	if len(first.Extra) != 0 {
+		t.Fatalf("mimetype carries a %d-byte extra field; EPUB forbids it", len(first.Extra))
+	}
 	if got := readFile(t, reader, "mimetype"); got != "application/epub+zip" {
 		t.Fatalf("mimetype = %q", got)
 	}
