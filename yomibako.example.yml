@@ -1,0 +1,21 @@
+# Скопировать в yomibako.yml и поправить под себя. Все поля необязательны.
+api_base: https://api.cdnlibs.org/api
+site_base: https://ranobelib.me
+site_id: 3
+
+# Пауза между запросами к сайту. Меньше 600ms не стоит: API отвечает 429.
+request_interval: 600ms
+
+# Куда складывать готовые тома.
+output_dir: out
+
+# Встраивать иллюстрации глав.
+include_images: true
+
+# Авторизация нужна только для лицензированных и части 18+ тайтлов.
+# Достаточно одного из двух вариантов.
+auth:
+  # access token из localStorage сайта (ключ auth -> token.access_token)
+  token: ""
+  # либо экспорт куков из браузера в формате Netscape
+  cookies_file: ""

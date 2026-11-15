@@ -20,3 +20,11 @@ tmp/
 # Тестовый вывод
 *.test
 *.out
+
+# Go
+/yomibako
+/out/
+
+# Локальный конфиг с токеном
+/yomibako.yml
+/yomibako.yaml
