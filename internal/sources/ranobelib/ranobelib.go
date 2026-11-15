@@ -56,12 +56,11 @@ func (s *Source) resolveSlug(ctx context.Context, slug string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	slugs := make([]string, 0, len(result.Items))
 	for _, item := range result.Items {
-		if item.Slug == slug || strings.HasSuffix(item.Slug, "--"+slug) {
-			return item.Slug, nil
-		}
+		slugs = append(slugs, item.Slug)
 	}
-	return "", fmt.Errorf("title %q not found", slug)
+	return pickSlug(slugs, slug)
 }
 
 // Chapters implements source.Source.
@@ -140,6 +139,32 @@ func (s *Source) Chapter(ctx context.Context, slug string, chapter source.Chapte
 // FetchImage implements source.Source.
 func (s *Source) FetchImage(ctx context.Context, url string) (source.Image, error) {
 	return s.Client.FetchImage(ctx, url)
+}
+
+// pickSlug chooses the canonical slug for a requested one. Exact matches win; a slug that is only
+// a prefix of the real one ("no-game-no-life" against "no-game-no-life-novel") is accepted when
+// exactly one result fits, so a short slug is not a dead end but an ambiguous one still is.
+func pickSlug(slugs []string, want string) (string, error) {
+	var exact, prefix []string
+	for _, canonical := range slugs {
+		name := searchName(canonical)
+		switch {
+		case canonical == want || name == want:
+			exact = append(exact, canonical)
+		case strings.HasPrefix(name, want+"-"):
+			prefix = append(prefix, canonical)
+		}
+	}
+	if len(exact) == 1 {
+		return exact[0], nil
+	}
+	if len(exact) == 0 && len(prefix) == 1 {
+		return prefix[0], nil
+	}
+	if len(exact)+len(prefix) > 1 {
+		return "", fmt.Errorf("slug %q is ambiguous: %s", want, strings.Join(append(exact, prefix...), ", "))
+	}
+	return "", fmt.Errorf("title %q not found", want)
 }
 
 // searchName drops the numeric id prefix from a canonical slug.
