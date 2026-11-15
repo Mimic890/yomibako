@@ -11,9 +11,11 @@ import (
 	"time"
 
 	"github.com/Mimic890/yomibako/internal/build"
+	"github.com/Mimic890/yomibako/internal/check"
 	"github.com/Mimic890/yomibako/internal/config"
 	"github.com/Mimic890/yomibako/internal/logx"
 	"github.com/Mimic890/yomibako/internal/pipeline"
+	"github.com/Mimic890/yomibako/internal/reconcile"
 	"github.com/Mimic890/yomibako/internal/source"
 	"github.com/Mimic890/yomibako/internal/store"
 	"github.com/Mimic890/yomibako/internal/telegram"
@@ -54,7 +56,8 @@ const helpText = `<b>Yomibako</b>
 /list - что уже в базе
 /add &lt;название|ссылка&gt; - выбрать тома и собрать
 /search &lt;запрос&gt; - найти тайтл
-/check - есть ли новые тома
+/check - новые тома и новые главы
+/sync - сверить базу с библиотекой
 /subscribe &lt;ссылка|slug&gt; [часы] - следить за тайтлом
 /unsubscribe &lt;ссылка|slug&gt; - перестать следить
 /status - сводка
@@ -141,6 +144,8 @@ func (b *Bot) handle(ctx context.Context, message *telegram.Message) {
 		b.status(ctx, message.Chat.ID)
 	case "check":
 		b.check(ctx, message.Chat.ID)
+	case "sync":
+		b.sync(ctx, message.Chat.ID)
 	case "add":
 		b.add(ctx, message.Chat.ID, args)
 	case "search":
@@ -208,55 +213,54 @@ func (b *Bot) status(ctx context.Context, chatID int64) {
 }
 
 func (b *Bot) check(ctx context.Context, chatID int64) {
-	subscriptions, err := b.st.Subscriptions(ctx)
+	reports, err := check.Run(ctx, b.st, b.src)
 	if err != nil {
 		b.reply(ctx, chatID, "ошибка базы: "+html.EscapeString(err.Error()))
 		return
 	}
-	if len(subscriptions) == 0 {
+	if len(reports) == 0 {
 		b.reply(ctx, chatID, "подписок нет")
 		return
 	}
 
-	logx.Infof("проверка подписок: %d", len(subscriptions))
 	var out strings.Builder
-	total := 0
-	for _, title := range subscriptions {
-		chapters, err := b.src.Chapters(ctx, title.Slug)
-		if err != nil {
-			fmt.Fprintf(&out, "%s: ошибка %s\n", html.EscapeString(title.Title), html.EscapeString(err.Error()))
+	newVolumes, updated := 0, 0
+	for _, report := range reports {
+		name := html.EscapeString(report.Title.Title)
+		if report.Err != nil {
+			fmt.Fprintf(&out, "%s: ошибка %s\n", name, html.EscapeString(report.Err.Error()))
 			continue
 		}
-		volumes := build.GroupVolumes(chapters)
-		known, err := b.st.VolumeLabels(ctx, title.ID)
-		if err != nil {
-			b.reply(ctx, chatID, "ошибка базы: "+html.EscapeString(err.Error()))
-			return
-		}
-
-		var fresh []string
-		for _, volume := range volumes {
-			if _, ok := known[volume.Label]; !ok {
-				fresh = append(fresh, volume.Label)
-			}
-		}
-		last := ""
-		if len(volumes) > 0 {
-			last = volumes[len(volumes)-1].Label
-		}
-		_ = b.st.MarkChecked(ctx, title.ID, last)
-
-		if len(fresh) == 0 {
-			fmt.Fprintf(&out, "%s: новых томов нет\n", html.EscapeString(title.Title))
+		if len(report.New) == 0 && len(report.Updated) == 0 {
+			fmt.Fprintf(&out, "%s: без изменений\n", name)
 			continue
 		}
-		total += len(fresh)
-		fmt.Fprintf(&out, "%s: новые тома %s\n", html.EscapeString(title.Title), html.EscapeString(strings.Join(fresh, ", ")))
+		fmt.Fprintf(&out, "<b>%s</b>\n", name)
+		for _, volume := range report.New {
+			newVolumes++
+			fmt.Fprintf(&out, "  новый том %s (%d глав)\n", html.EscapeString(volume.Label), len(volume.Chapters))
+		}
+		for _, update := range report.Updated {
+			updated++
+			fmt.Fprintf(&out, "  том %s: %d глав из %d\n", html.EscapeString(update.Label), update.Have, update.Site)
+		}
 	}
-	if total > 0 {
-		fmt.Fprintf(&out, "\nвсего новых: %d", total)
+	if newVolumes == 0 && updated == 0 {
+		out.WriteString("\nнового нет")
+	} else {
+		fmt.Fprintf(&out, "\nновых томов: %d, томов с новыми главами: %d", newVolumes, updated)
 	}
 	b.reply(ctx, chatID, out.String())
+}
+
+func (b *Bot) sync(ctx context.Context, chatID int64) {
+	report, err := reconcile.Run(ctx, b.st, b.cfg.LibraryDir)
+	if err != nil {
+		b.reply(ctx, chatID, "ошибка: "+html.EscapeString(err.Error()))
+		return
+	}
+	b.reply(ctx, chatID, fmt.Sprintf("сверено с библиотекой\nимпортировано: %d\nнет на диске: %d\nнеизвестных книг: %d",
+		report.Imported, report.Missing, report.Unknown))
 }
 
 func (b *Bot) add(ctx context.Context, chatID int64, args []string) {

@@ -8,7 +8,9 @@ import (
 	"os"
 
 	"github.com/Mimic890/yomibako/internal/build"
+	"github.com/Mimic890/yomibako/internal/check"
 	"github.com/Mimic890/yomibako/internal/config"
+	"github.com/Mimic890/yomibako/internal/reconcile"
 	"github.com/Mimic890/yomibako/internal/source"
 	"github.com/Mimic890/yomibako/internal/store"
 )
@@ -77,10 +79,13 @@ func runList(args []string) error {
 		}
 		for _, volume := range title.Volumes {
 			status := volume.Status
-			if volume.Status == store.StatusImported {
+			switch volume.Status {
+			case store.StatusImported:
 				status = "импортирован"
-			} else if volume.Status == store.StatusBuilt {
+			case store.StatusBuilt:
 				status = "собран"
+			case store.StatusMissing:
+				status = "нет в библиотеке"
 			}
 			fmt.Printf("    %-10s %3d глав  %-12s %s\n",
 				build.VolumeTitle(volume.Label), volume.Chapters, status, humanSize(int(volume.SizeBytes)))
@@ -185,58 +190,67 @@ func runCheck(args []string) error {
 	ctx, cancel := contextWithSignals()
 	defer cancel()
 
-	subscriptions, err := st.Subscriptions(ctx)
+	reports, err := check.Run(ctx, st, src)
 	if err != nil {
 		return err
 	}
-	if len(subscriptions) == 0 {
+	if len(reports) == 0 {
 		fmt.Println("подписок нет")
 		return nil
 	}
 
-	found := 0
-	for _, title := range subscriptions {
-		chapters, err := src.Chapters(ctx, title.Slug)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "%s: %v\n", title.Title, err)
+	newVolumes, updated := 0, 0
+	for _, report := range reports {
+		if report.Err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", report.Title.Title, report.Err)
 			continue
 		}
-		volumes := build.GroupVolumes(chapters)
-		known, err := st.VolumeLabels(ctx, title.ID)
-		if err != nil {
-			return err
-		}
-
-		var fresh []build.Volume
-		for _, volume := range volumes {
-			if _, ok := known[volume.Label]; !ok {
-				fresh = append(fresh, volume)
-			}
-		}
-
-		last := ""
-		if len(volumes) > 0 {
-			last = volumes[len(volumes)-1].Label
-		}
-		if err := st.MarkChecked(ctx, title.ID, last); err != nil {
-			return err
-		}
-
-		if len(fresh) == 0 {
-			fmt.Printf("%s: новых томов нет\n", title.Title)
+		if len(report.New) == 0 && len(report.Updated) == 0 {
+			fmt.Printf("%s: без изменений\n", report.Title.Title)
 			continue
 		}
-		found += len(fresh)
-		fmt.Printf("%s: новых томов %d\n", title.Title, len(fresh))
-		for _, volume := range fresh {
-			fmt.Printf("    %s (%d глав)\n", build.VolumeTitle(volume.Label), len(volume.Chapters))
+		fmt.Printf("%s\n", report.Title.Title)
+		for _, volume := range report.New {
+			newVolumes++
+			fmt.Printf("    новый том %s (%d глав)\n", volume.Label, len(volume.Chapters))
+		}
+		for _, update := range report.Updated {
+			updated++
+			fmt.Printf("    том %s: %d глав из %d\n", update.Label, update.Have, update.Site)
 		}
 	}
+	fmt.Printf("\nновых томов: %d, томов с новыми главами: %d\n", newVolumes, updated)
+	return nil
+}
 
-	if found == 0 {
-		return nil
+// ── sync ──────────────────────────────────────────────────────────────────────────────────────
+
+func runSync(args []string) error {
+	fs := flag.NewFlagSet("sync", flag.ContinueOnError)
+	var c common
+	c.register(fs)
+	if err := fs.Parse(reorderArgs(args)); err != nil {
+		return err
 	}
-	fmt.Printf("\nвсего новых томов: %d\n", found)
+
+	cfg, _, err := c.load()
+	if err != nil {
+		return err
+	}
+	st, err := openStore(cfg)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	ctx, cancel := contextWithSignals()
+	defer cancel()
+
+	report, err := reconcile.Run(ctx, st, cfg.LibraryDir)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("импортировано: %d\nнет на диске: %d\nнеизвестных книг: %d\n", report.Imported, report.Missing, report.Unknown)
 	return nil
 }
 

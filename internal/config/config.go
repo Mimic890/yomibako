@@ -21,6 +21,7 @@ type Config struct {
 	BookDock        string   `yaml:"book_dock"`
 	Database        string   `yaml:"database"`
 	LogLevel        string   `yaml:"log_level"`
+	LibraryDir      string   `yaml:"library_dir"`
 	UserAgent       string   `yaml:"user_agent"`
 	IncludeImages   *bool    `yaml:"include_images"`
 	Auth            Auth     `yaml:"auth"`

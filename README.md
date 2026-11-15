@@ -23,6 +23,7 @@ services:
       - ./config:/config
       - ./data:/data
       - /srv/docker/bookorbit/data/state/book-dock:/book-dock
+      - /srv/media/books:/library:ro
     environment:
       TZ: Europe/Moscow
 ```
@@ -33,6 +34,7 @@ services:
 ```yaml
 database: /data/yomibako.db
 book_dock: /book-dock
+library_dir: /library
 output_dir: /data/out
 ```
 
@@ -88,8 +90,12 @@ yomibako check                         # есть ли новые тома
 yomibako unsubscribe no-game-no-life-novel
 ```
 
-`check` сравнивает список томов на сайте с тем, что записано в базе, и печатает новые. Ничего
-не скачивает - сборка остаётся ручной.
+`check` сравнивает сайт с базой: какие тома новые и в каких уже собранных томах прибавилось
+глав. Ничего не скачивает - сборка остаётся ручной.
+
+`sync` сверяет базу с библиотекой на диске: книги, которые там лежат, помечаются
+импортированными, а удалённые - «нет в библиотеке». Книги узнаются по идентификатору внутри
+EPUB (`urn:ranobelib:<slug>:<том>`), а не по именам папок.
 
 Если задан `book_dock` в конфиге или флаг `--dock`, тома кладутся прямо в папку BookOrbit:
 файл `<Название> - Том 01.epub`, дальше он сам читает метаданные и переносит книгу в библиотеку.

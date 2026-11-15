@@ -12,6 +12,9 @@ output_dir: out
 # debug, info, warn, error
 log_level: info
 
+# Папка библиотеки BookOrbit, только для чтения: нужна команде sync.
+library_dir: ""
+
 # Файл базы: что скачано, подписки, время проверок.
 database: yomibako.db
 

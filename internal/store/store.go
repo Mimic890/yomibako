@@ -22,6 +22,7 @@ const (
 	StatusBuilt    = "built"
 	StatusImported = "imported"
 	StatusFailed   = "failed"
+	StatusMissing  = "missing"
 )
 
 // Title is a tracked book series.
@@ -238,6 +239,12 @@ func (s *Store) RecordVolume(ctx context.Context, volume Volume) error {
 	return err
 }
 
+// SetVolumeStatus changes the status of one volume.
+func (s *Store) SetVolumeStatus(ctx context.Context, titleID int64, label, status string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE volumes SET status = ? WHERE title_id = ? AND label = ?`, status, titleID, label)
+	return err
+}
+
 // MarkVolumeImported flips a volume to imported once BookOrbit has taken the file.
 func (s *Store) MarkVolumeImported(ctx context.Context, titleID int64, label string) error {
 	_, err := s.db.ExecContext(ctx, `
@@ -297,7 +304,7 @@ func (s *Store) Titles(ctx context.Context) ([]Title, error) {
 	}
 
 	for i := range titles {
-		volumes, err := s.volumes(ctx, titles[i].ID)
+		volumes, err := s.Volumes(ctx, titles[i].ID)
 		if err != nil {
 			return nil, err
 		}
@@ -311,7 +318,8 @@ func (s *Store) Titles(ctx context.Context) ([]Title, error) {
 	return titles, nil
 }
 
-func (s *Store) volumes(ctx context.Context, titleID int64) ([]Volume, error) {
+// Volumes returns every recorded volume of a title.
+func (s *Store) Volumes(ctx context.Context, titleID int64) ([]Volume, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, title_id, label, number, chapters, status, file_path, size_bytes, built_at, imported_at
 		FROM volumes WHERE title_id = ? ORDER BY number, label`, titleID)

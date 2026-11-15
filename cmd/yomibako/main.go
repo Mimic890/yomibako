@@ -34,6 +34,7 @@ const usage = `yomibako - загрузка тайтлов в EPUB
   yomibako subscribe <slug|ссылка> [--interval 24]
   yomibako unsubscribe <slug|ссылка>
   yomibako check
+  yomibako sync
   yomibako bot
 
 Флаги:
@@ -79,6 +80,8 @@ func run(args []string) error {
 		return runUnsubscribe(rest)
 	case "check":
 		return runCheck(rest)
+	case "sync":
+		return runSync(rest)
 	case "bot":
 		return runBot(rest)
 	default:
