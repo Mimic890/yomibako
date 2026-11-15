@@ -24,3 +24,7 @@ tmp/
 # Go
 /yomibako
 /out/
+
+# Локальный конфиг с токеном
+/yomibako.yml
+/yomibako.yaml
