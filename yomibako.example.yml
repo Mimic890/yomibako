@@ -9,6 +9,10 @@ request_interval: 600ms
 # Куда складывать готовые тома.
 output_dir: out
 
+# Папка book-dock BookOrbit. Если задана, тома кладутся сразу туда и BookOrbit
+# импортирует их сам; output_dir тогда не используется.
+book_dock: ""
+
 # Встраивать иллюстрации глав.
 include_images: true
 

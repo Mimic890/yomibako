@@ -34,8 +34,15 @@ yomibako add lord-of-the-mysteries --volume 1
 yomibako add lord-of-the-mysteries --all
 
 # несколько томов, без иллюстраций, в свою папку
-yomibako add lord-of-the-mysteries --volume 1,2 --no-images --out /srv/docker/bookorbit/book-dock
+yomibako add lord-of-the-mysteries --volume 1,2 --no-images --out /tmp/books
+
+# сразу в book-dock BookOrbit и дождаться импорта
+yomibako add lord-of-the-mysteries --volume 1 --dock /srv/docker/bookorbit/data/state/book-dock --wait
 ```
+
+Если задан `book_dock` в конфиге или флаг `--dock`, тома кладутся прямо в папку BookOrbit:
+файл `<Название> - Том 01.epub`, дальше он сам читает метаданные и переносит книгу в библиотеку.
+`--wait` ждёт, пока BookOrbit заберёт файл.
 
 Ссылка тоже подходит: `yomibako add https://ranobelib.me/ru/book/20818--lord-of-the-mysteries`.
 

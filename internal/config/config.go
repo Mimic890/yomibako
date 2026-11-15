@@ -18,6 +18,7 @@ type Config struct {
 	SiteID          int      `yaml:"site_id"`
 	RequestInterval Duration `yaml:"request_interval"`
 	OutputDir       string   `yaml:"output_dir"`
+	BookDock        string   `yaml:"book_dock"`
 	UserAgent       string   `yaml:"user_agent"`
 	IncludeImages   *bool    `yaml:"include_images"`
 	Auth            Auth     `yaml:"auth"`

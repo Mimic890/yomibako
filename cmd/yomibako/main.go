@@ -77,6 +77,8 @@ type common struct {
 	noImages   bool
 	token      string
 	cookies    string
+	dock       string
+	wait       bool
 }
 
 func (c *common) register(fs *flag.FlagSet) {
@@ -87,6 +89,8 @@ func (c *common) register(fs *flag.FlagSet) {
 	fs.BoolVar(&c.noImages, "no-images", false, "не встраивать иллюстрации")
 	fs.StringVar(&c.token, "token", "", "access token RanobeLib")
 	fs.StringVar(&c.cookies, "cookies", "", "файл cookies.txt из браузера")
+	fs.StringVar(&c.dock, "dock", "", "папка book-dock BookOrbit")
+	fs.BoolVar(&c.wait, "wait", false, "дождаться, пока BookOrbit заберёт файл")
 }
 
 func (c *common) load() (config.Config, *ranobelib.Source, error) {
@@ -100,6 +104,9 @@ func (c *common) load() (config.Config, *ranobelib.Source, error) {
 	if c.noImages {
 		disabled := false
 		cfg.IncludeImages = &disabled
+	}
+	if c.dock != "" {
+		cfg.BookDock = c.dock
 	}
 
 	client := ranobelib.NewClient()
@@ -324,6 +331,9 @@ func runAdd(args []string) error {
 	}
 
 	dir := filepath.Join(cfg.OutputDir, safeName(title.Title))
+	if cfg.BookDock != "" {
+		dir = cfg.BookDock
+	}
 	fmt.Printf("%s\n%s\n\n", title.Title, dir)
 
 	for _, volume := range selected {
@@ -350,11 +360,19 @@ func runAdd(args []string) error {
 			return fmt.Errorf("%s: %w", build.VolumeTitle(volume.Label), err)
 		}
 
-		volumeDir := filepath.Join(dir, volumeDirName(volume))
-		if err := os.MkdirAll(volumeDir, 0o755); err != nil {
-			return err
+		var path string
+		if cfg.BookDock != "" {
+			if err := os.MkdirAll(cfg.BookDock, 0o755); err != nil {
+				return err
+			}
+			path = filepath.Join(cfg.BookDock, dockFileName(title.Title, volume))
+		} else {
+			volumeDir := filepath.Join(dir, volumeDirName(volume))
+			if err := os.MkdirAll(volumeDir, 0o755); err != nil {
+				return err
+			}
+			path = filepath.Join(volumeDir, "book.epub")
 		}
-		path := filepath.Join(volumeDir, "book.epub")
 		if err := os.WriteFile(path, result.Bytes, 0o644); err != nil {
 			return err
 		}
@@ -365,8 +383,39 @@ func runAdd(args []string) error {
 			fmt.Fprintln(os.Stderr, "  предупреждение:", warning)
 		}
 		fmt.Println("  ->", path)
+		if cfg.BookDock != "" && c.wait {
+			if err := waitForDock(ctx, path); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
+}
+
+// waitForDock blocks until BookOrbit has taken the file out of the dock, which is what happens
+// when it is ingested and finalized.
+func waitForDock(ctx context.Context, path string) error {
+	deadline := time.Now().Add(10 * time.Minute)
+	for {
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			fmt.Println("  BookOrbit забрал файл")
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("файл всё ещё в book-dock через 10 минут: %s", path)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+// dockFileName is the name a volume gets inside the dock. BookOrbit reads the real metadata from
+// the EPUB itself; the name only has to be unique and readable.
+func dockFileName(title string, volume build.Volume) string {
+	return fmt.Sprintf("%s - %s.epub", safeName(title), volumeDirName(volume))
 }
 
 func selectVolumes(volumes []build.Volume, list string, all bool) ([]build.Volume, error) {
