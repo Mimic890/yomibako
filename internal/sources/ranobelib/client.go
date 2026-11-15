@@ -62,6 +62,11 @@ type Client struct {
 	MaxImageBytes int64
 	HTTP          *http.Client
 
+	// Token is a RanobeLib access token; when set, every request carries it as a bearer token.
+	Token string
+	// Cookies are sent as a Cookie header, for sessions exported from a browser.
+	Cookies string
+
 	mu       sync.Mutex
 	lastCall time.Time
 }
@@ -127,6 +132,12 @@ func (c *Client) do(ctx context.Context, rawURL string) (*http.Response, error) 
 	// The API keys some routes by site; without this header the title endpoint answers 404.
 	req.Header.Set("Site-Id", strconv.Itoa(c.SiteID))
 	req.Header.Set("client-time-zone", "Europe/Moscow")
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	if c.Cookies != "" {
+		req.Header.Set("Cookie", c.Cookies)
+	}
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {

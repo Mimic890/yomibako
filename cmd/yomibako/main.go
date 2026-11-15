@@ -75,6 +75,8 @@ type common struct {
 	configPath string
 	outDir     string
 	noImages   bool
+	token      string
+	cookies    string
 }
 
 func (c *common) register(fs *flag.FlagSet) {
@@ -83,6 +85,8 @@ func (c *common) register(fs *flag.FlagSet) {
 	fs.StringVar(&c.outDir, "out", "", "куда складывать EPUB")
 	fs.StringVar(&c.outDir, "o", "", "куда складывать EPUB")
 	fs.BoolVar(&c.noImages, "no-images", false, "не встраивать иллюстрации")
+	fs.StringVar(&c.token, "token", "", "access token RanobeLib")
+	fs.StringVar(&c.cookies, "cookies", "", "файл cookies.txt из браузера")
 }
 
 func (c *common) load() (config.Config, *ranobelib.Source, error) {
@@ -105,6 +109,22 @@ func (c *common) load() (config.Config, *ranobelib.Source, error) {
 	client.Interval = time.Duration(cfg.RequestInterval)
 	if cfg.UserAgent != "" {
 		client.UserAgent = cfg.UserAgent
+	}
+
+	client.Token = cfg.Auth.Token
+	if c.token != "" {
+		client.Token = c.token
+	}
+	cookiesFile := cfg.Auth.CookiesFile
+	if c.cookies != "" {
+		cookiesFile = c.cookies
+	}
+	if cookiesFile != "" {
+		cookies, err := ranobelib.LoadCookies(cookiesFile)
+		if err != nil {
+			return cfg, nil, err
+		}
+		client.Cookies = cookies
 	}
 	return cfg, &ranobelib.Source{Client: client}, nil
 }

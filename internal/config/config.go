@@ -20,6 +20,14 @@ type Config struct {
 	OutputDir       string   `yaml:"output_dir"`
 	UserAgent       string   `yaml:"user_agent"`
 	IncludeImages   *bool    `yaml:"include_images"`
+	Auth            Auth     `yaml:"auth"`
+}
+
+// Auth carries the RanobeLib session. A token is the access token from the site's localStorage;
+// a cookies file is the Netscape export from a browser extension. Either one is enough.
+type Auth struct {
+	Token       string `yaml:"token"`
+	CookiesFile string `yaml:"cookies_file"`
 }
 
 // Duration is a time.Duration that YAML writes as "600ms" instead of nanoseconds.
