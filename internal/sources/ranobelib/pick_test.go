@@ -17,7 +17,7 @@ func TestPickSlug(t *testing.T) {
 		{want: "6777--no-game-no-life-novel", slug: "no-game-no-life-novel"},
 		{want: "6777--no-game-no-life-novel", slug: "6777--no-game-no-life-novel"},
 		{want: "20818--lord-of-the-mysteries", slug: "lord-of-the-mysteries"},
-		{slug: "no-game-no-life", wantErr: true}, // two candidates share the prefix
+		{want: "6777--no-game-no-life-novel", slug: "no-game-no-life"}, // shortest prefix wins
 		{slug: "nothing-here", wantErr: true},
 	}
 	for _, tc := range cases {

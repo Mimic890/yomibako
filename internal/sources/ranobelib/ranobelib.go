@@ -158,11 +158,19 @@ func pickSlug(slugs []string, want string) (string, error) {
 	if len(exact) == 1 {
 		return exact[0], nil
 	}
-	if len(exact) == 0 && len(prefix) == 1 {
-		return prefix[0], nil
+	if len(exact) == 0 && len(prefix) > 0 {
+		// Search returns the base title before its spin-offs, and the base title has the shortest
+		// slug, so the shortest prefix match is the one the user meant.
+		best := prefix[0]
+		for _, candidate := range prefix[1:] {
+			if len(candidate) < len(best) {
+				best = candidate
+			}
+		}
+		return best, nil
 	}
-	if len(exact)+len(prefix) > 1 {
-		return "", fmt.Errorf("slug %q is ambiguous: %s", want, strings.Join(append(exact, prefix...), ", "))
+	if len(exact) > 1 {
+		return "", fmt.Errorf("slug %q is ambiguous: %s", want, strings.Join(exact, ", "))
 	}
 	return "", fmt.Errorf("title %q not found", want)
 }
