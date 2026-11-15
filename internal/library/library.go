@@ -21,9 +21,13 @@ type Entry struct {
 	Identifier string
 	Slug       string
 	Volume     string
+	Title      string
 }
 
-var identifierPattern = regexp.MustCompile(`(?is)<dc:identifier[^>]*>([^<]+)</dc:identifier>`)
+var (
+	identifierPattern = regexp.MustCompile(`(?is)<dc:identifier[^>]*>([^<]+)</dc:identifier>`)
+	titlePattern      = regexp.MustCompile(`(?is)<dc:title[^>]*>([^<]+)</dc:title>`)
+)
 
 // Scan walks dir and returns every EPUB whose identifier belongs to this service.
 func Scan(ctx context.Context, dir string) ([]Entry, error) {
@@ -49,7 +53,7 @@ func Scan(ctx context.Context, dir string) ([]Entry, error) {
 		if entry.IsDir() || !strings.EqualFold(filepath.Ext(path), ".epub") {
 			return nil
 		}
-		identifier, err := readIdentifier(path)
+		identifier, title, err := readMetadata(path)
 		if err != nil {
 			return nil
 		}
@@ -57,7 +61,7 @@ func Scan(ctx context.Context, dir string) ([]Entry, error) {
 		if !ok {
 			return nil
 		}
-		entries = append(entries, Entry{Path: path, Identifier: identifier, Slug: slug, Volume: volume})
+		entries = append(entries, Entry{Path: path, Identifier: identifier, Slug: slug, Volume: volume, Title: title})
 		return nil
 	})
 	if err != nil {
@@ -66,11 +70,11 @@ func Scan(ctx context.Context, dir string) ([]Entry, error) {
 	return entries, nil
 }
 
-// readIdentifier returns the dc:identifier of an EPUB.
-func readIdentifier(path string) (string, error) {
+// readMetadata returns the dc:identifier and dc:title of an EPUB.
+func readMetadata(path string) (identifier, title string, err error) {
 	reader, err := zip.OpenReader(path)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer reader.Close()
 
@@ -80,20 +84,24 @@ func readIdentifier(path string) (string, error) {
 		}
 		handle, err := file.Open()
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		data, err := io.ReadAll(io.LimitReader(handle, 1<<20))
 		handle.Close()
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		match := identifierPattern.FindSubmatch(data)
 		if match == nil {
-			return "", fmt.Errorf("no dc:identifier in %s", path)
+			return "", "", fmt.Errorf("no dc:identifier in %s", path)
 		}
-		return strings.TrimSpace(string(match[1])), nil
+		identifier = strings.TrimSpace(string(match[1]))
+		if titleMatch := titlePattern.FindSubmatch(data); titleMatch != nil {
+			title = strings.TrimSpace(string(titleMatch[1]))
+		}
+		return identifier, title, nil
 	}
-	return "", fmt.Errorf("no OPF in %s", path)
+	return "", "", fmt.Errorf("no OPF in %s", path)
 }
 
 // parseIdentifier splits "urn:ranobelib:<slug>:<volume>".

@@ -250,7 +250,7 @@ func runSync(args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("импортировано: %d\nнет на диске: %d\nнеизвестных книг: %d\n", report.Imported, report.Missing, report.Unknown)
+	fmt.Printf("импортировано: %d\nнет на диске: %d\nдобавлено из библиотеки: %d\n", report.Imported, report.Missing, report.Adopted)
 	return nil
 }
 

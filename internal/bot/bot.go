@@ -259,8 +259,8 @@ func (b *Bot) sync(ctx context.Context, chatID int64) {
 		b.reply(ctx, chatID, "ошибка: "+html.EscapeString(err.Error()))
 		return
 	}
-	b.reply(ctx, chatID, fmt.Sprintf("сверено с библиотекой\nимпортировано: %d\nнет на диске: %d\nнеизвестных книг: %d",
-		report.Imported, report.Missing, report.Unknown))
+	b.reply(ctx, chatID, fmt.Sprintf("сверено с библиотекой\nимпортировано: %d\nнет на диске: %d\nдобавлено из библиотеки: %d",
+		report.Imported, report.Missing, report.Adopted))
 }
 
 func (b *Bot) add(ctx context.Context, chatID int64, args []string) {

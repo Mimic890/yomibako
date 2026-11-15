@@ -80,3 +80,34 @@ func TestRunRequiresDirectory(t *testing.T) {
 		t.Fatal("expected an error without a library directory")
 	}
 }
+
+func TestRunAdoptsUnknownBooks(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "sync.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	root := t.TempDir()
+	writeBook(t, filepath.Join(root, "Автор", "Книга", "01"), "urn:ranobelib:9--new:1")
+
+	report, err := Run(ctx, st, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Adopted != 1 {
+		t.Fatalf("expected one adopted book, got %+v", report)
+	}
+
+	titles, err := st.Titles(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(titles) != 1 || titles[0].Slug != "9--new" {
+		t.Fatalf("unexpected titles: %+v", titles)
+	}
+	if len(titles[0].Volumes) != 1 || titles[0].Volumes[0].Status != store.StatusImported {
+		t.Fatalf("unexpected volumes: %+v", titles[0].Volumes)
+	}
+}

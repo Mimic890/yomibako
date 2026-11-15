@@ -8,6 +8,8 @@ package reconcile
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"time"
 
 	"github.com/Mimic890/yomibako/internal/library"
 	"github.com/Mimic890/yomibako/internal/logx"
@@ -18,7 +20,28 @@ import (
 type Report struct {
 	Imported int
 	Missing  int
-	Unknown  int
+	Adopted  int
+}
+
+func timePtr() *time.Time {
+	now := time.Now()
+	return &now
+}
+
+// adopt finds or creates the title a library book belongs to.
+func adopt(ctx context.Context, st *store.Store, entry library.Entry) (int64, error) {
+	existing, err := st.FindTitle(ctx, "ranobelib", entry.Slug)
+	if err != nil {
+		return 0, err
+	}
+	if existing != nil {
+		return existing.ID, nil
+	}
+	name := entry.Title
+	if name == "" {
+		name = entry.Slug
+	}
+	return st.UpsertTitle(ctx, store.Title{Source: "ranobelib", Slug: entry.Slug, Title: name})
 }
 
 // Run scans dir and updates the status of every recorded volume.
@@ -71,7 +94,8 @@ func Run(ctx context.Context, st *store.Store, dir string) (Report, error) {
 		}
 	}
 
-	// Books in the library that the database does not know about.
+	// Books in the library that the database does not know about are adopted: the library is the
+	// source of truth, so a book that is there was imported at some point.
 	known := make(map[string]map[string]bool, len(titles))
 	for _, title := range titles {
 		known[title.Slug] = make(map[string]bool, len(title.Volumes))
@@ -79,12 +103,27 @@ func Run(ctx context.Context, st *store.Store, dir string) (Report, error) {
 			known[title.Slug][volume.Label] = true
 		}
 	}
-	for slug, labels := range present {
-		for label := range labels {
-			if !known[slug][label] {
-				report.Unknown++
-			}
+	for _, entry := range entries {
+		if known[entry.Slug][entry.Volume] {
+			continue
 		}
+		titleID, err := adopt(ctx, st, entry)
+		if err != nil {
+			return report, err
+		}
+		number, _ := strconv.Atoi(entry.Volume)
+		if err := st.RecordVolume(ctx, store.Volume{
+			TitleID:    titleID,
+			Label:      entry.Volume,
+			Number:     number,
+			Status:     store.StatusImported,
+			FilePath:   entry.Path,
+			ImportedAt: timePtr(),
+		}); err != nil {
+			return report, err
+		}
+		report.Adopted++
+		logx.Infof("sync: %s %s — добавлен из библиотеки", entry.Title, entry.Volume)
 	}
 
 	return report, nil
