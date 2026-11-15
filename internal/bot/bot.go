@@ -97,6 +97,10 @@ func (b *Bot) Run(ctx context.Context) error {
 		return fmt.Errorf("telegram: токен не принят: %w", err)
 	}
 	logx.Infof("бот @%s запущен, чат %d", me.Username, b.allowed)
+	// A restart kills a running build, so say so instead of leaving the chat silent.
+	if _, err := b.api.SendMessage(ctx, b.allowed, "бот перезапущен"); err != nil {
+		logx.Warnf("не удалось сообщить о запуске: %v", err)
+	}
 
 	_ = b.api.SetMyCommands(ctx, [][2]string{
 		{"list", "что уже в базе"},

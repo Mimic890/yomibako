@@ -97,12 +97,14 @@ func TestBotAnswersList(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	messages := fake.messages()
-	if len(messages) == 0 {
-		t.Fatal("bot did not answer")
+	var answer string
+	for _, message := range fake.messages() {
+		if strings.Contains(message, "пусто") {
+			answer = message
+		}
 	}
-	if !strings.Contains(messages[0], "пусто") {
-		t.Fatalf("unexpected answer: %q", messages[0])
+	if answer == "" {
+		t.Fatalf("bot did not answer the command: %v", fake.messages())
 	}
 }
 
@@ -128,8 +130,10 @@ func TestBotIgnoresForeignChat(t *testing.T) {
 	go b.Run(ctx)
 
 	time.Sleep(300 * time.Millisecond)
-	if messages := fake.messages(); len(messages) != 0 {
-		t.Fatalf("bot answered a foreign chat: %v", messages)
+	for _, message := range fake.messages() {
+		if message != "бот перезапущен" {
+			t.Fatalf("bot answered a foreign chat: %q", message)
+		}
 	}
 }
 
@@ -171,9 +175,14 @@ func TestBotCancelWithoutJob(t *testing.T) {
 	for time.Now().Before(deadline) && len(fake.messages()) == 0 {
 		time.Sleep(20 * time.Millisecond)
 	}
-	messages := fake.messages()
-	if len(messages) == 0 || !strings.Contains(messages[0], "нечего отменять") {
-		t.Fatalf("unexpected answer: %v", messages)
+	var answer string
+	for _, message := range fake.messages() {
+		if strings.Contains(message, "нечего отменять") {
+			answer = message
+		}
+	}
+	if answer == "" {
+		t.Fatalf("unexpected answer: %v", fake.messages())
 	}
 }
 
