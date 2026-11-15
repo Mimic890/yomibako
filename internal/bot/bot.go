@@ -4,6 +4,8 @@ package bot
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"html"
 	"strconv"
@@ -31,8 +33,18 @@ type Bot struct {
 	allowed int64
 	jobs    chan job
 
-	mu     sync.Mutex
-	cancel context.CancelFunc
+	mu      sync.Mutex
+	cancel  context.CancelFunc
+	pending map[string]pendingJob
+}
+
+// pendingJob is a build waiting for confirmation. It is kept in memory: a confirmation that
+// outlives a restart is not worth persisting.
+type pendingJob struct {
+	slug    string
+	volumes []string
+	all     bool
+	created time.Time
 }
 
 type job struct {
@@ -52,6 +64,7 @@ func New(cfg config.Config, src source.Source, st *store.Store) *Bot {
 		st:      st,
 		allowed: cfg.Telegram.ChatID,
 		jobs:    make(chan job, 8),
+		pending: make(map[string]pendingJob),
 	}
 }
 
@@ -465,13 +478,144 @@ func (b *Bot) handleCallback(ctx context.Context, query *telegram.CallbackQuery)
 		}
 	case "v":
 		if len(parts) == 3 {
-			b.enqueue(ctx, chatID, parts[1], parts[2], false)
+			b.confirm(ctx, chatID, parts[1], []string{parts[2]}, false)
 		}
 	case "a":
 		if len(parts) == 2 {
-			b.enqueue(ctx, chatID, parts[1], "", true)
+			b.confirm(ctx, chatID, parts[1], nil, true)
+		}
+	case "go":
+		if len(parts) == 2 {
+			b.startPending(ctx, chatID, parts[1])
 		}
 	}
+}
+
+// confirm shows what is about to be downloaded and waits for a button press.
+func (b *Bot) confirm(ctx context.Context, chatID int64, slug string, volumes []string, all bool) {
+	title, err := b.src.Title(ctx, slug)
+	if err != nil {
+		b.reply(ctx, chatID, "не нашёл: "+html.EscapeString(err.Error()))
+		return
+	}
+	chapters, err := b.src.Chapters(ctx, title.Slug)
+	if err != nil {
+		b.reply(ctx, chatID, "ошибка: "+html.EscapeString(err.Error()))
+		return
+	}
+	groups := build.GroupVolumes(chapters)
+
+	titleID, _ := b.st.UpsertTitle(ctx, store.Title{
+		Source:        b.src.Name(),
+		Slug:          title.Slug,
+		Title:         title.Title,
+		Authors:       title.Authors,
+		CoverURL:      title.CoverURL,
+		SourceURL:     title.SourceURL,
+		TotalChapters: len(chapters),
+		TotalVolumes:  len(groups),
+	})
+	present := map[string]bool{}
+	if labels, err := b.st.VolumeLabels(ctx, titleID); err == nil {
+		for label, status := range labels {
+			if status != store.StatusMissing {
+				present[label] = true
+			}
+		}
+	}
+
+	var selected []build.Volume
+	if all {
+		for _, group := range groups {
+			if !present[group.Label] {
+				selected = append(selected, group)
+			}
+		}
+	} else {
+		for _, group := range groups {
+			if len(volumes) > 0 && group.Label == volumes[0] {
+				selected = append(selected, group)
+			}
+		}
+	}
+
+	if len(selected) == 0 {
+		b.reply(ctx, chatID, "все тома уже в библиотеке")
+		return
+	}
+
+	var out strings.Builder
+	fmt.Fprintf(&out, "<b>%s</b>\n", html.EscapeString(title.Title))
+	totalChapters := 0
+	for i, group := range selected {
+		if i == 12 {
+			fmt.Fprintf(&out, "… и ещё %d томов\n", len(selected)-i)
+			break
+		}
+		totalChapters += len(group.Chapters)
+		fmt.Fprintf(&out, "%s · %d глав\n", html.EscapeString(build.VolumeTitle(group.Label)), len(group.Chapters))
+	}
+	if len(selected) <= 12 {
+		fmt.Fprintf(&out, "\nвсего глав: %d", totalChapters)
+	}
+	if all && len(present) > 0 {
+		fmt.Fprintf(&out, "\nуже в библиотеке, пропускаю: %d томов", len(present))
+	}
+	if !all && present[selected[0].Label] {
+		out.WriteString("\n\nэтот том уже в библиотеке - собрать заново?")
+	}
+
+	labels := make([]string, 0, len(selected))
+	for _, group := range selected {
+		labels = append(labels, group.Label)
+	}
+	token := b.remember(pendingJob{slug: title.Slug, volumes: labels, all: all, created: time.Now()})
+
+	rows := [][]telegram.Button{
+		{{Text: "Подтвердить", Data: "go:" + token}},
+		{{Text: "Назад", Data: "t:" + title.Slug}},
+	}
+	if _, err := b.api.SendMessageWithKeyboard(ctx, chatID, out.String(), rows); err != nil {
+		logx.Errorf("telegram: %v", err)
+	}
+}
+
+// randomToken returns a short unguessable token for a pending confirmation.
+func randomToken() string {
+	buf := make([]byte, 6)
+	if _, err := rand.Read(buf); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	return hex.EncodeToString(buf)
+}
+
+// remember stores a pending job and returns its token.
+func (b *Bot) remember(job pendingJob) string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	// Drop confirmations older than ten minutes.
+	for token, item := range b.pending {
+		if time.Since(item.created) > 10*time.Minute {
+			delete(b.pending, token)
+		}
+	}
+	token := randomToken()
+	b.pending[token] = job
+	return token
+}
+
+// startPending enqueues a confirmed job.
+func (b *Bot) startPending(ctx context.Context, chatID int64, token string) {
+	b.mu.Lock()
+	item, ok := b.pending[token]
+	delete(b.pending, token)
+	b.mu.Unlock()
+	if !ok {
+		b.reply(ctx, chatID, "подтверждение устарело, начни заново")
+		return
+	}
+	// The confirmation already decided which volumes to build, so the job carries the exact list.
+	b.enqueue(ctx, chatID, item.slug, strings.Join(item.volumes, ","), false)
 }
 
 // enqueue puts a build job on the queue and reports it in the chat.
