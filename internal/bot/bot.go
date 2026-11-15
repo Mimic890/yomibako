@@ -88,10 +88,14 @@ func (b *Bot) Run(ctx context.Context) error {
 	_ = b.api.SetMyCommands(ctx, [][2]string{
 		{"list", "что уже в базе"},
 		{"add", "собрать том и отдать в BookOrbit"},
-		{"check", "есть ли новые тома"},
+		{"search", "найти тайтл"},
+		{"check", "новые тома и главы"},
+		{"sync", "сверить базу с библиотекой"},
 		{"subscribe", "следить за тайтлом"},
 		{"unsubscribe", "перестать следить"},
 		{"status", "сводка"},
+		{"cancel", "прервать текущую сборку"},
+		{"token", "обновить токен RanobeLib"},
 		{"help", "справка"},
 	})
 
