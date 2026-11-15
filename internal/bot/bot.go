@@ -219,8 +219,21 @@ func (b *Bot) list(ctx context.Context, chatID int64) {
 		totalVolumes, siteChapters := title.TotalVolumes, title.TotalChapters
 		if b.src != nil {
 			if chapters, err := b.src.Chapters(ctx, title.Slug); err == nil {
-				totalVolumes = len(build.GroupVolumes(chapters))
+				groups := build.GroupVolumes(chapters)
+				totalVolumes = len(groups)
 				siteChapters = len(chapters)
+				// A volume adopted from the library has no chapter count; fill it in while the
+				// list is being built, so the numbers become right without a separate command.
+				onSite := make(map[string]int, len(groups))
+				for _, group := range groups {
+					onSite[group.Label] = len(group.Chapters)
+				}
+				for _, volume := range title.Volumes {
+					if volume.Chapters == 0 && onSite[volume.Label] > 0 {
+						_ = b.st.SetVolumeChapters(ctx, title.ID, volume.Label, onSite[volume.Label])
+						serverChapters += onSite[volume.Label]
+					}
+				}
 			}
 		}
 
