@@ -128,3 +128,43 @@ func TestPlainTextToHTML(t *testing.T) {
 		t.Fatalf("text was not escaped: %s", html)
 	}
 }
+
+func TestHTMLStringRewritesImages(t *testing.T) {
+	raw := `<p>Текст</p><img loading="lazy" src="https://cdn.example/a.png" /><img src="https://cdn.example/b.png"/>`
+	html := htmlStringToXHTML(raw, func(url string) string {
+		switch url {
+		case "https://cdn.example/a.png":
+			return "../images/a.png"
+		case "https://cdn.example/b.png":
+			return "../images/b.png"
+		}
+		return ""
+	})
+	if !strings.Contains(html, `src="../images/a.png"`) || !strings.Contains(html, `src="../images/b.png"`) {
+		t.Fatalf("images were not rewritten: %s", html)
+	}
+	if !strings.Contains(html, "<p>Текст</p>") {
+		t.Fatalf("text was lost: %s", html)
+	}
+}
+
+func TestHTMLStringDropsScripts(t *testing.T) {
+	raw := `<p>ok</p><script>alert(1)</script><img src="https://cdn.example/a.png" onerror="alert(2)"/>`
+	html := htmlStringToXHTML(raw, func(string) string { return "../images/a.png" })
+	if strings.Contains(html, "script") || strings.Contains(html, "onerror") {
+		t.Fatalf("unsafe markup survived: %s", html)
+	}
+}
+
+func TestHTMLStringEmptyWhenOnlyUnresolvedImages(t *testing.T) {
+	if html := htmlStringToXHTML(`<img src="https://cdn.example/a.png"/>`, nil); html != "" {
+		t.Fatalf("expected empty output, got %q", html)
+	}
+}
+
+func TestCollectImagesFromHTMLString(t *testing.T) {
+	refs := collectImages(`<img src="https://cdn.example/a.png"/><img src="https://cdn.example/a.png"/>`, nil)
+	if len(refs) != 1 || refs[0].URL != "https://cdn.example/a.png" {
+		t.Fatalf("unexpected refs: %+v", refs)
+	}
+}

@@ -175,6 +175,18 @@ func resolveImageURL(attachments []map[string]any, reference any) (string, strin
 func collectImages(document any, attachments []map[string]any) []imageRef {
 	seen := make(map[string]struct{})
 	var out []imageRef
+
+	if raw, ok := document.(string); ok {
+		for _, url := range htmlImageSources(raw) {
+			if _, exists := seen[url]; exists {
+				continue
+			}
+			seen[url] = struct{}{}
+			out = append(out, imageRef{URL: url})
+		}
+		return out
+	}
+
 	var walk func(node any)
 	walk = func(node any) {
 		m := object(node)
@@ -210,7 +222,7 @@ func documentToHTML(document any, attachments []map[string]any, imageHref func(u
 	case nil:
 		return ""
 	case string:
-		return plainTextToHTML(htmlToText(v))
+		return htmlStringToXHTML(v, imageHref)
 	case map[string]any:
 		if text(v["type"]) == "doc" {
 			return strings.TrimSpace(renderChildren(v["content"], attachments, imageHref))
@@ -219,6 +231,66 @@ func documentToHTML(document any, attachments []map[string]any, imageHref func(u
 	default:
 		return plainTextToHTML(fmt.Sprint(v))
 	}
+}
+
+var (
+	imgTag      = regexp.MustCompile(`(?is)<img\b[^>]*>`)
+	imgSrc      = regexp.MustCompile(`(?is)\bsrc\s*=\s*["']([^"']+)["']`)
+	dangerBlocks = []*regexp.Regexp{
+		regexp.MustCompile(`(?is)<script\b[^>]*>.*?</script>`),
+		regexp.MustCompile(`(?is)<style\b[^>]*>.*?</style>`),
+		regexp.MustCompile(`(?is)<iframe\b[^>]*>.*?</iframe>`),
+		regexp.MustCompile(`(?is)<object\b[^>]*>.*?</object>`),
+		regexp.MustCompile(`(?is)<embed\b[^>]*>.*?</embed>`),
+	}
+	eventAttr   = regexp.MustCompile(`(?is)\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)`)
+	jsHref      = regexp.MustCompile(`(?is)href\s*=\s*["']\s*javascript:[^"']*["']`)
+)
+
+// htmlImageSources lists the image URLs of an HTML fragment.
+func htmlImageSources(raw string) []string {
+	var urls []string
+	for _, tag := range imgTag.FindAllString(raw, -1) {
+		if match := imgSrc.FindStringSubmatch(tag); match != nil {
+			urls = append(urls, match[1])
+		}
+	}
+	return urls
+}
+
+// htmlStringToXHTML renders a chapter that the API returned as an HTML string. Images are
+// rewritten to their local copies, and anything executable is dropped: the fragment ends up inside
+// an EPUB, where a script tag is both useless and invalid.
+func htmlStringToXHTML(raw string, imageHref func(string) string) string {
+	if strings.TrimSpace(raw) == "" {
+		return ""
+	}
+	cleaned := raw
+	for _, block := range dangerBlocks {
+		cleaned = block.ReplaceAllString(cleaned, "")
+	}
+	cleaned = eventAttr.ReplaceAllString(cleaned, "")
+	cleaned = jsHref.ReplaceAllString(cleaned, "")
+
+	cleaned = imgTag.ReplaceAllStringFunc(cleaned, func(tag string) string {
+		match := imgSrc.FindStringSubmatch(tag)
+		if match == nil {
+			return ""
+		}
+		href := ""
+		if imageHref != nil {
+			href = imageHref(match[1])
+		}
+		if href == "" {
+			return ""
+		}
+		return `<img src="` + escapeHTML(href) + `" alt=""/>`
+	})
+
+	if strings.TrimSpace(anyTag.ReplaceAllString(cleaned, "")) == "" && !strings.Contains(cleaned, "<img") {
+		return ""
+	}
+	return cleaned
 }
 
 // plainTextToHTML wraps plain text into paragraphs.
