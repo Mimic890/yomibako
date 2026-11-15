@@ -1,0 +1,9 @@
+.git
+out
+*.epub
+yomibako
+yomibako.db*
+yomibako.yml
+cookies.txt
+plugins
+docs

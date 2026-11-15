@@ -7,6 +7,42 @@
 глав. Тома не перезаписываются - новый том это новый файл, поэтому прогресс чтения и метаданные
 в библиотеке не ломаются.
 
+## Docker Compose
+
+```yaml
+services:
+  yomibako:
+    build:
+      context: /srv/dev/yomibako
+    image: yomibako:local
+    container_name: yomibako
+    restart: unless-stopped
+    command: ["bot"]
+    working_dir: /config
+    volumes:
+      - ./config:/config
+      - ./data:/data
+      - /srv/docker/bookorbit/data/state/book-dock:/book-dock
+    environment:
+      TZ: Europe/Moscow
+```
+
+Конфиг лежит в `./config/yomibako.yml`, база в `./data`, готовые тома уходят прямо в
+`book-dock` BookOrbit. Пути внутри контейнера:
+
+```yaml
+database: /data/yomibako.db
+book_dock: /book-dock
+output_dir: /data/out
+```
+
+Запуск и обновление:
+
+```bash
+docker compose up -d --build
+docker compose logs -f
+```
+
 ## Установка
 
 ```bash

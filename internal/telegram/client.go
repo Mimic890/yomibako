@@ -92,6 +92,13 @@ func (c *Client) call(ctx context.Context, method string, params url.Values, out
 	return nil
 }
 
+// Me returns the bot's own account, which is also a cheap way to validate the token.
+func (c *Client) Me(ctx context.Context) (User, error) {
+	var user User
+	err := c.call(ctx, "getMe", url.Values{}, &user)
+	return user, err
+}
+
 // GetUpdates long-polls for new updates.
 func (c *Client) GetUpdates(ctx context.Context, offset int64, timeout time.Duration) ([]Update, error) {
 	params := url.Values{}

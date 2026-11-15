@@ -68,6 +68,12 @@ func (b *Bot) Run(ctx context.Context) error {
 		return fmt.Errorf("telegram.chat_id не задан в конфиге")
 	}
 
+	me, err := b.api.Me(ctx)
+	if err != nil {
+		return fmt.Errorf("telegram: токен не принят: %w", err)
+	}
+	fmt.Printf("бот @%s запущен\n", me.Username)
+
 	_ = b.api.SetMyCommands(ctx, [][2]string{
 		{"list", "что уже в базе"},
 		{"add", "собрать том и отдать в BookOrbit"},
@@ -87,6 +93,7 @@ func (b *Bot) Run(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return nil
 			}
+			fmt.Println("telegram:", err)
 			select {
 			case <-ctx.Done():
 				return nil

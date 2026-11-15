@@ -44,6 +44,8 @@ func (f *fakeTelegram) handler(w http.ResponseWriter, r *http.Request) {
 		}
 		f.mu.Unlock()
 		json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": result})
+	case "getMe":
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{"id": 1, "username": "testbot"}})
 	case "sendMessage":
 		_ = r.ParseForm()
 		f.mu.Lock()
