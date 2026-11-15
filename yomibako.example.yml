@@ -26,3 +26,8 @@ auth:
   token: ""
   # либо экспорт куков из браузера в формате Netscape
   cookies_file: ""
+
+# Бот: токен от @BotFather и chat_id владельца. Бот отвечает только этому чату.
+telegram:
+  token: ""
+  chat_id: 0

@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/Mimic890/yomibako/internal/build"
 	"github.com/Mimic890/yomibako/internal/config"
@@ -242,25 +241,3 @@ func runCheck(args []string) error {
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────────────────────
-
-// recordVolume stores a built volume and, when BookOrbit already took the file, marks it imported.
-func recordVolume(ctx context.Context, st *store.Store, titleID int64, volume build.Volume, path string, size int, imported bool) error {
-	status := store.StatusBuilt
-	var importedAt *time.Time
-	if imported {
-		status = store.StatusImported
-		nowValue := time.Now()
-		importedAt = &nowValue
-	}
-	return st.RecordVolume(ctx, store.Volume{
-		TitleID:    titleID,
-		Label:      volume.Label,
-		Number:     volume.Number,
-		Chapters:   len(volume.Chapters),
-		Status:     status,
-		FilePath:   path,
-		SizeBytes:  int64(size),
-		BuiltAt:    time.Now(),
-		ImportedAt: importedAt,
-	})
-}

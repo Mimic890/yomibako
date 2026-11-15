@@ -17,6 +17,7 @@ import (
 
 	"github.com/Mimic890/yomibako/internal/build"
 	"github.com/Mimic890/yomibako/internal/config"
+	"github.com/Mimic890/yomibako/internal/pipeline"
 	"github.com/Mimic890/yomibako/internal/source"
 	"github.com/Mimic890/yomibako/internal/sources/ranobelib"
 )
@@ -32,6 +33,7 @@ const usage = `yomibako - загрузка тайтлов в EPUB
   yomibako subscribe <slug|ссылка> [--interval 24]
   yomibako unsubscribe <slug|ссылка>
   yomibako check
+  yomibako bot
 
 Флаги:
   -c, --config PATH   файл конфигурации (по умолчанию yomibako.yml)
@@ -76,6 +78,8 @@ func run(args []string) error {
 		return runUnsubscribe(rest)
 	case "check":
 		return runCheck(rest)
+	case "bot":
+		return runBot(rest)
 	default:
 		return fmt.Errorf("неизвестная команда %q (см. yomibako help)", command)
 	}
@@ -353,98 +357,48 @@ func runAdd(args []string) error {
 		covers = map[string]string{}
 	}
 
-	dir := filepath.Join(cfg.OutputDir, safeName(title.Title))
+	dir := filepath.Join(cfg.OutputDir, pipeline.SafeName(title.Title))
 	if cfg.BookDock != "" {
 		dir = cfg.BookDock
 	}
 	fmt.Printf("%s\n%s\n\n", title.Title, dir)
 
-	for _, volume := range selected {
-		if *limit > 0 && len(volume.Chapters) > *limit {
-			volume.Chapters = volume.Chapters[:*limit]
+	for i := range selected {
+		if *limit > 0 && len(selected[i].Chapters) > *limit {
+			selected[i].Chapters = selected[i].Chapters[:*limit]
 		}
-		coverURL := covers[volume.Label]
-		if coverURL == "" {
-			coverURL = title.CoverURL
-		}
+	}
 
-		started := time.Now()
-		result, err := build.BuildVolume(ctx, build.Options{
-			Source:        src,
-			Title:         title,
-			Volume:        volume,
-			CoverURL:      coverURL,
-			IncludeImages: cfg.ImagesEnabled(),
-			Progress: func(format string, args ...any) {
-				fmt.Fprintf(os.Stderr, "  "+format+"\n", args...)
-			},
-		})
-		if err != nil {
-			return fmt.Errorf("%s: %w", build.VolumeTitle(volume.Label), err)
-		}
-
-		var path string
-		if cfg.BookDock != "" {
-			if err := os.MkdirAll(cfg.BookDock, 0o755); err != nil {
-				return err
-			}
-			path = filepath.Join(cfg.BookDock, dockFileName(title.Title, volume))
-		} else {
-			volumeDir := filepath.Join(dir, volumeDirName(volume))
-			if err := os.MkdirAll(volumeDir, 0o755); err != nil {
-				return err
-			}
-			path = filepath.Join(volumeDir, "book.epub")
-		}
-		if err := os.WriteFile(path, result.Bytes, 0o644); err != nil {
-			return err
-		}
-
-		fmt.Printf("%s: %d глав, %s, %s\n", build.VolumeTitle(volume.Label), len(volume.Chapters),
-			humanSize(len(result.Bytes)), time.Since(started).Round(time.Second))
+	results, err := pipeline.Run(ctx, pipeline.Options{
+		Source:        src,
+		Store:         st,
+		Title:         title,
+		TitleID:       titleID,
+		Volumes:       selected,
+		Covers:        covers,
+		Dock:          cfg.BookDock,
+		OutDir:        cfg.OutputDir,
+		IncludeImages: cfg.ImagesEnabled(),
+		WaitForDock:   c.wait,
+		Progress: func(format string, args ...any) {
+			fmt.Fprintf(os.Stderr, "  "+format+"\n", args...)
+		},
+	})
+	for _, result := range results {
+		fmt.Printf("%s: %d глав, %s, %s\n", build.VolumeTitle(result.Volume.Label), len(result.Volume.Chapters),
+			humanSize(result.Size), result.Duration.Round(time.Second))
 		for _, warning := range result.Warnings {
 			fmt.Fprintln(os.Stderr, "  предупреждение:", warning)
 		}
-		fmt.Println("  ->", path)
-
-		imported := false
-		if cfg.BookDock != "" && c.wait {
-			if err := waitForDock(ctx, path); err != nil {
-				return err
-			}
-			imported = true
+		fmt.Println("  ->", result.Path)
+		if result.Imported {
+			fmt.Println("  BookOrbit забрал файл")
 		}
-		if err := recordVolume(ctx, st, titleID, volume, path, len(result.Bytes), imported); err != nil {
-			return err
-		}
+	}
+	if err != nil {
+		return err
 	}
 	return nil
-}
-
-// waitForDock blocks until BookOrbit has taken the file out of the dock, which is what happens
-// when it is ingested and finalized.
-func waitForDock(ctx context.Context, path string) error {
-	deadline := time.Now().Add(10 * time.Minute)
-	for {
-		if _, err := os.Stat(path); os.IsNotExist(err) {
-			fmt.Println("  BookOrbit забрал файл")
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("файл всё ещё в book-dock через 10 минут: %s", path)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(2 * time.Second):
-		}
-	}
-}
-
-// dockFileName is the name a volume gets inside the dock. BookOrbit reads the real metadata from
-// the EPUB itself; the name only has to be unique and readable.
-func dockFileName(title string, volume build.Volume) string {
-	return fmt.Sprintf("%s - %s.epub", safeName(title), volumeDirName(volume))
 }
 
 func selectVolumes(volumes []build.Volume, list string, all bool) ([]build.Volume, error) {
@@ -517,26 +471,6 @@ func parseSlug(input string) string {
 	}
 	parts := strings.Split(strings.Trim(input, "/"), "/")
 	return parts[len(parts)-1]
-}
-
-func volumeDirName(volume build.Volume) string {
-	if volume.Number > 0 {
-		return fmt.Sprintf("Том %02d", volume.Number)
-	}
-	return "Без тома"
-}
-
-func safeName(value string) string {
-	replacer := strings.NewReplacer("/", "-", "\\", "-", ":", "-", "*", "-", "?", "-", `"`, "-", "<", "-", ">", "-", "|", "-")
-	name := strings.TrimSpace(replacer.Replace(value))
-	name = strings.Join(strings.Fields(name), " ")
-	if name == "" {
-		return "book"
-	}
-	if len([]rune(name)) > 120 {
-		name = string([]rune(name)[:120])
-	}
-	return strings.TrimRight(name, ". ")
 }
 
 func humanSize(bytes int) string {

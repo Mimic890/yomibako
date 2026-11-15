@@ -23,6 +23,13 @@ type Config struct {
 	UserAgent       string   `yaml:"user_agent"`
 	IncludeImages   *bool    `yaml:"include_images"`
 	Auth            Auth     `yaml:"auth"`
+	Telegram        Telegram `yaml:"telegram"`
+}
+
+// Telegram is the bot configuration.
+type Telegram struct {
+	Token  string `yaml:"token"`
+	ChatID int64  `yaml:"chat_id"`
 }
 
 // Auth carries the RanobeLib session. A token is the access token from the site's localStorage;

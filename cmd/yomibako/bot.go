@@ -1,0 +1,33 @@
+package main
+
+import (
+	"flag"
+	"fmt"
+
+	"github.com/Mimic890/yomibako/internal/bot"
+)
+
+func runBot(args []string) error {
+	fs := flag.NewFlagSet("bot", flag.ContinueOnError)
+	var c common
+	c.register(fs)
+	if err := fs.Parse(reorderArgs(args)); err != nil {
+		return err
+	}
+
+	cfg, src, err := c.load()
+	if err != nil {
+		return err
+	}
+	st, err := openStore(cfg)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	ctx, cancel := contextWithSignals()
+	defer cancel()
+
+	fmt.Println("бот запущен")
+	return bot.New(cfg, src, st).Run(ctx)
+}

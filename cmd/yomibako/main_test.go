@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/Mimic890/yomibako/internal/build"
+	"github.com/Mimic890/yomibako/internal/pipeline"
 )
 
 func TestParseSlug(t *testing.T) {
@@ -22,19 +23,19 @@ func TestParseSlug(t *testing.T) {
 
 func TestDockFileName(t *testing.T) {
 	volume := build.Volume{Label: "1", Number: 1}
-	if got := dockFileName("Повелитель тайн", volume); got != "Повелитель тайн - Том 01.epub" {
+	if got := pipeline.DockFileName("Повелитель тайн", volume); got != "Повелитель тайн - Том 01.epub" {
 		t.Errorf("dockFileName = %q", got)
 	}
-	if got := dockFileName("Книга/с: слэшем", build.Volume{Label: "0"}); got != "Книга-с- слэшем - Без тома.epub" {
+	if got := pipeline.DockFileName("Книга/с: слэшем", build.Volume{Label: "0"}); got != "Книга-с- слэшем - Без тома.epub" {
 		t.Errorf("dockFileName with unsafe characters = %q", got)
 	}
 }
 
 func TestSafeName(t *testing.T) {
-	if got := safeName("  a/b:c  "); got != "a-b-c" {
+	if got := pipeline.SafeName("  a/b:c  "); got != "a-b-c" {
 		t.Errorf("safeName = %q", got)
 	}
-	if got := safeName("   "); got != "book" {
+	if got := pipeline.SafeName("   "); got != "book" {
 		t.Errorf("safeName of blank = %q", got)
 	}
 }
