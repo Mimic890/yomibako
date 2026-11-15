@@ -287,8 +287,12 @@ func (b *Bot) status(ctx context.Context, chatID int64) {
 		b.reply(ctx, chatID, "ошибка базы: "+html.EscapeString(err.Error()))
 		return
 	}
-	b.reply(ctx, chatID, fmt.Sprintf("тайтлов: %d\nтомов: %d (импортировано %d)\nподписок: %d",
-		stats.Titles, stats.Volumes, stats.Imported, stats.Subscriptions))
+	text := fmt.Sprintf("тайтлов: %d\nтомов: %d (импортировано %d)\nподписок: %d",
+		stats.Titles, stats.Volumes, stats.Imported, stats.Subscriptions)
+	if stats.Missing > 0 {
+		text += fmt.Sprintf("\nнет в библиотеке: %d", stats.Missing)
+	}
+	b.reply(ctx, chatID, text)
 }
 
 func (b *Bot) check(ctx context.Context, chatID int64) {

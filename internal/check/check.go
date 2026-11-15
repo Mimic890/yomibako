@@ -59,6 +59,11 @@ func Run(ctx context.Context, st *store.Store, src source.Source) ([]TitleReport
 				report.New = append(report.New, volume)
 				continue
 			}
+			// A volume adopted from the library has no chapter count yet; fill it in silently.
+			if known.Chapters == 0 && len(volume.Chapters) > 0 {
+				_ = st.SetVolumeChapters(ctx, title.ID, volume.Label, len(volume.Chapters))
+				continue
+			}
 			if len(volume.Chapters) > known.Chapters {
 				report.Updated = append(report.Updated, Update{
 					Label: volume.Label,

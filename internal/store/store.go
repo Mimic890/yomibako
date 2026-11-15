@@ -245,6 +245,12 @@ func (s *Store) RecordVolume(ctx context.Context, volume Volume) error {
 	return err
 }
 
+// SetVolumeChapters records how many chapters a volume has on the source.
+func (s *Store) SetVolumeChapters(ctx context.Context, titleID int64, label string, chapters int) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE volumes SET chapters = ? WHERE title_id = ? AND label = ?`, chapters, titleID, label)
+	return err
+}
+
 // SetVolumeStatus changes the status of one volume.
 func (s *Store) SetVolumeStatus(ctx context.Context, titleID int64, label, status string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE volumes SET status = ? WHERE title_id = ? AND label = ?`, status, titleID, label)
@@ -447,6 +453,7 @@ type Stats struct {
 	Titles        int
 	Volumes       int
 	Imported      int
+	Missing       int
 	Subscriptions int
 }
 
@@ -456,10 +463,11 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 	err := s.db.QueryRowContext(ctx, `
 		SELECT
 			(SELECT COUNT(*) FROM titles),
-			(SELECT COUNT(*) FROM volumes),
+			(SELECT COUNT(*) FROM volumes WHERE status <> 'missing'),
 			(SELECT COUNT(*) FROM volumes WHERE status = 'imported'),
+			(SELECT COUNT(*) FROM volumes WHERE status = 'missing'),
 			(SELECT COUNT(*) FROM subscriptions WHERE enabled = 1)`).
-		Scan(&stats.Titles, &stats.Volumes, &stats.Imported, &stats.Subscriptions)
+		Scan(&stats.Titles, &stats.Volumes, &stats.Imported, &stats.Missing, &stats.Subscriptions)
 	return stats, err
 }
 
