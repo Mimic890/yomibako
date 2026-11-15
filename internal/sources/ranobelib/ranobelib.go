@@ -43,14 +43,15 @@ func (s *Source) Title(ctx context.Context, slug string) (source.Title, error) {
 
 	canonical, resolveErr := s.resolveSlug(ctx, slug)
 	if resolveErr != nil {
-		return source.Title{}, err
+		return source.Title{}, fmt.Errorf("тайтл %q не найден в API RanobeLib (возможно, лицензирован или удалён с сайта): %w", slug, err)
 	}
 	return s.Client.Title(ctx, canonical)
 }
 
-// resolveSlug finds the canonical "<id>--<slug>" form through search.
+// resolveSlug finds the canonical "<id>--<slug>" form through search. The numeric prefix of a
+// site URL ("6777--no-game-no-life-novel") is not part of the searchable name and is dropped.
 func (s *Source) resolveSlug(ctx context.Context, slug string) (string, error) {
-	query := strings.ReplaceAll(strings.Trim(slug, "-"), "-", " ")
+	query := strings.ReplaceAll(strings.Trim(searchName(slug), "-"), "-", " ")
 	result, err := s.Client.Search(ctx, query, 1)
 	if err != nil {
 		return "", err
@@ -139,6 +140,26 @@ func (s *Source) Chapter(ctx context.Context, slug string, chapter source.Chapte
 // FetchImage implements source.Source.
 func (s *Source) FetchImage(ctx context.Context, url string) (source.Image, error) {
 	return s.Client.FetchImage(ctx, url)
+}
+
+// searchName drops the numeric id prefix from a canonical slug.
+func searchName(slug string) string {
+	if index := strings.Index(slug, "--"); index > 0 && isDigits(slug[:index]) {
+		return slug[index+2:]
+	}
+	return slug
+}
+
+func isDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func shortHash(value string) string {
