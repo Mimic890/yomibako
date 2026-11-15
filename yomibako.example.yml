@@ -11,3 +11,11 @@ output_dir: out
 
 # Встраивать иллюстрации глав.
 include_images: true
+
+# Авторизация нужна только для лицензированных и части 18+ тайтлов.
+# Достаточно одного из двух вариантов.
+auth:
+  # access token из localStorage сайта (ключ auth -> token.access_token)
+  token: ""
+  # либо экспорт куков из браузера в формате Netscape
+  cookies_file: ""
