@@ -57,3 +57,14 @@ func TestVolumeTitle(t *testing.T) {
 		}
 	}
 }
+
+func TestVariants(t *testing.T) {
+	chapters := []source.Chapter{
+		{Number: "1", Branches: 3},
+		{Number: "2", Branches: 1},
+		{Number: "3", Branches: 0},
+	}
+	if got := Variants(chapters); got != 5 {
+		t.Fatalf("Variants = %d, want 5", got)
+	}
+}

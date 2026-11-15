@@ -55,6 +55,9 @@ type Chapter struct {
 	Name         string
 	DisplayTitle string
 	BranchID     int
+	// Branches is how many translation variants the source lists for this chapter. The chapter
+	// itself is one, but readers that list every variant show more entries than there are chapters.
+	Branches int
 }
 
 // Image is a downloaded image ready to be embedded into an EPUB.

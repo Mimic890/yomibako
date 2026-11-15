@@ -216,12 +216,13 @@ func (b *Bot) list(ctx context.Context, chatID int64) {
 			serverChapters += volume.Chapters
 		}
 
-		totalVolumes, siteChapters := title.TotalVolumes, title.TotalChapters
+		totalVolumes, siteChapters, variants := title.TotalVolumes, title.TotalChapters, 0
 		if b.src != nil {
 			if chapters, err := b.src.Chapters(ctx, title.Slug); err == nil {
 				groups := build.GroupVolumes(chapters)
 				totalVolumes = len(groups)
 				siteChapters = len(chapters)
+				variants = build.Variants(chapters)
 				// A volume adopted from the library has no chapter count; fill it in while the
 				// list is being built, so the numbers become right without a separate command.
 				onSite := make(map[string]int, len(groups))
@@ -237,20 +238,25 @@ func (b *Bot) list(ctx context.Context, chatID int64) {
 			}
 		}
 
+		chaptersLabel := fmt.Sprintf("%d/%d глав", serverChapters, siteChapters)
+		if variants > siteChapters {
+			chaptersLabel += fmt.Sprintf(" (%d с переводами)", variants)
+		}
+
 		link := map[string]any{"type": "url", "url": title.SourceURL, "text": title.Title}
 		text := []any{
 			link,
 			" · ",
 			fmt.Sprintf("%d/%d томов", ready, totalVolumes),
 			" · ",
-			fmt.Sprintf("%d/%d глав", serverChapters, siteChapters),
+			chaptersLabel,
 		}
 		items = append(items, map[string]any{
 			"blocks": []any{map[string]any{"type": "paragraph", "text": text}},
 		})
 
-		fmt.Fprintf(&fallback, `<a href="%s">%s</a> · %d/%d томов · %d/%d глав`+"\n",
-			html.EscapeString(title.SourceURL), html.EscapeString(title.Title), ready, totalVolumes, serverChapters, siteChapters)
+		fmt.Fprintf(&fallback, `<a href="%s">%s</a> · %d/%d томов · %s`+"\n",
+			html.EscapeString(title.SourceURL), html.EscapeString(title.Title), ready, totalVolumes, html.EscapeString(chaptersLabel))
 	}
 
 	blocks := []map[string]any{{"type": "list", "items": items}}

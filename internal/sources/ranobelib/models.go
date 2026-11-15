@@ -260,11 +260,16 @@ func normalizeChapters(payload chaptersResponse) ([]Chapter, error) {
 	order := make([]string, 0, len(payload.Data))
 
 	for _, raw := range payload.Data {
+		branches := len(array(raw["branches"]))
+		if branches == 0 {
+			branches = 1
+		}
 		chapter := Chapter{
-			Index:  numberOrZero(raw["index"]),
-			Volume: text(raw["volume"]),
-			Number: text(raw["number"]),
-			Name:   text(raw["name"]),
+			Index:    numberOrZero(raw["index"]),
+			Volume:   text(raw["volume"]),
+			Number:   text(raw["number"]),
+			Name:     text(raw["name"]),
+			Branches: branches,
 		}
 		chapter.DisplayTitle = displayTitle(chapter)
 		key := chapterKey(chapter)

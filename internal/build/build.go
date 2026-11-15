@@ -54,6 +54,20 @@ func volumeNumber(label string) int {
 	return 0
 }
 
+// Variants counts every translation variant of every chapter, which is the number a reader that
+// lists each variant shows.
+func Variants(chapters []source.Chapter) int {
+	total := 0
+	for _, chapter := range chapters {
+		if chapter.Branches > 1 {
+			total += chapter.Branches
+		} else {
+			total++
+		}
+	}
+	return total
+}
+
 // VolumeTitle is the human-readable name of a volume.
 func VolumeTitle(label string) string {
 	if label == "" || label == "0" {

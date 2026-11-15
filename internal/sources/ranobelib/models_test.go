@@ -137,3 +137,22 @@ func TestDetectImageMediaType(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeChaptersCountsBranches(t *testing.T) {
+	payload := decode[chaptersResponse](t, `{
+	  "data": [
+	    {"index": 1, "volume": "1", "number": "1", "branches": [{"id": 1}, {"id": 2}, {"id": 3}]},
+	    {"index": 2, "volume": "1", "number": "2", "branches": []}
+	  ]
+	}`)
+	chapters, err := normalizeChapters(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if chapters[0].Branches != 3 {
+		t.Errorf("branches = %d, want 3", chapters[0].Branches)
+	}
+	if chapters[1].Branches != 1 {
+		t.Errorf("branches = %d, want 1", chapters[1].Branches)
+	}
+}
