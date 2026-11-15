@@ -52,13 +52,14 @@ func New(cfg config.Config, src source.Source, st *store.Store) *Bot {
 const helpText = `<b>Yomibako</b>
 
 /list - что уже в базе
-/add &lt;ссылка|slug&gt; [том] - собрать и отдать в BookOrbit
+/add &lt;название|ссылка&gt; - выбрать тома и собрать
+/search &lt;запрос&gt; - найти тайтл
 /check - есть ли новые тома
 /subscribe &lt;ссылка|slug&gt; [часы] - следить за тайтлом
 /unsubscribe &lt;ссылка|slug&gt; - перестать следить
 /status - сводка
 
-Том можно указать как <code>1</code>, <code>1,2</code> или <code>all</code>. Без тома собирается первый.`
+/add показывает список томов кнопками: жмёшь нужный - том собирается и уходит в book-dock.`
 
 // Run polls for updates until the context is cancelled.
 func (b *Bot) Run(ctx context.Context) error {
@@ -104,10 +105,12 @@ func (b *Bot) Run(ctx context.Context) error {
 		}
 		for _, update := range updates {
 			offset = update.UpdateID + 1
-			if update.Message == nil {
-				continue
+			switch {
+			case update.Message != nil:
+				b.handle(ctx, update.Message)
+			case update.CallbackQuery != nil:
+				b.handleCallback(ctx, update.CallbackQuery)
 			}
-			b.handle(ctx, update.Message)
 		}
 	}
 }
@@ -139,7 +142,9 @@ func (b *Bot) handle(ctx context.Context, message *telegram.Message) {
 	case "check":
 		b.check(ctx, message.Chat.ID)
 	case "add":
-		b.add(ctx, message, args)
+		b.add(ctx, message.Chat.ID, args)
+	case "search":
+		b.search(ctx, message.Chat.ID, args)
 	case "subscribe":
 		b.subscribe(ctx, message.Chat.ID, args, true)
 	case "unsubscribe":
@@ -254,36 +259,157 @@ func (b *Bot) check(ctx context.Context, chatID int64) {
 	b.reply(ctx, chatID, out.String())
 }
 
-func (b *Bot) add(ctx context.Context, message *telegram.Message, args []string) {
+func (b *Bot) add(ctx context.Context, chatID int64, args []string) {
 	if len(args) == 0 {
-		b.reply(ctx, message.Chat.ID, "нужна ссылка или slug: /add &lt;ссылка&gt; [том]")
+		b.reply(ctx, chatID, "нужно название или ссылка: /add &lt;название&gt;")
 		return
 	}
 	if b.cfg.BookDock == "" {
-		b.reply(ctx, message.Chat.ID, "book_dock не настроен в конфиге")
+		b.reply(ctx, chatID, "book_dock не настроен в конфиге")
 		return
 	}
 
-	slug := parseSlug(args[0])
-	volumes := ""
-	all := false
-	if len(args) > 1 {
-		if strings.EqualFold(args[1], "all") {
-			all = true
-		} else {
-			volumes = args[1]
+	query := strings.Join(args, " ")
+	title, err := b.src.Title(ctx, parseSlug(query))
+	if err != nil {
+		// Not a slug: search and let the user pick the title first.
+		b.search(ctx, chatID, args)
+		return
+	}
+	b.showVolumes(ctx, chatID, title.Slug)
+}
+
+// search lists matching titles as buttons.
+func (b *Bot) search(ctx context.Context, chatID int64, args []string) {
+	if len(args) == 0 {
+		b.reply(ctx, chatID, "нужен поисковый запрос")
+		return
+	}
+	query := strings.Join(args, " ")
+	result, err := b.src.Search(ctx, query, 1)
+	if err != nil {
+		b.reply(ctx, chatID, "ошибка поиска: "+html.EscapeString(err.Error()))
+		return
+	}
+	if len(result.Items) == 0 {
+		b.reply(ctx, chatID, "ничего не найдено")
+		return
+	}
+
+	rows := make([][]telegram.Button, 0, len(result.Items))
+	for i, item := range result.Items {
+		if i >= 8 {
+			break
+		}
+		rows = append(rows, []telegram.Button{{Text: item.Title, Data: "t:" + item.Slug}})
+	}
+	_, err = b.api.SendMessageWithKeyboard(ctx, chatID, "выбери тайтл:", rows)
+	if err != nil {
+		logx.Errorf("telegram: %v", err)
+	}
+}
+
+// showVolumes lists the volumes of a title as buttons.
+func (b *Bot) showVolumes(ctx context.Context, chatID int64, slug string) {
+	title, err := b.src.Title(ctx, slug)
+	if err != nil {
+		b.reply(ctx, chatID, "не нашёл: "+html.EscapeString(err.Error()))
+		return
+	}
+	chapters, err := b.src.Chapters(ctx, title.Slug)
+	if err != nil {
+		b.reply(ctx, chatID, "ошибка: "+html.EscapeString(err.Error()))
+		return
+	}
+	volumes := build.GroupVolumes(chapters)
+	if len(volumes) == 0 {
+		b.reply(ctx, chatID, "у тайтла нет глав")
+		return
+	}
+
+	titleID, err := b.st.UpsertTitle(ctx, store.Title{
+		Source:        b.src.Name(),
+		Slug:          title.Slug,
+		Title:         title.Title,
+		Authors:       title.Authors,
+		CoverURL:      title.CoverURL,
+		SourceURL:     title.SourceURL,
+		TotalChapters: len(chapters),
+		TotalVolumes:  len(volumes),
+	})
+	known := map[string]string{}
+	if err == nil {
+		if labels, err := b.st.VolumeLabels(ctx, titleID); err == nil {
+			known = labels
 		}
 	}
 
+	rows := volumeButtons(title.Slug, volumes, known)
+
+	text := fmt.Sprintf("<b>%s</b>\nтомов: %d, глав: %d\n\nвыбери том:", html.EscapeString(title.Title), len(volumes), len(chapters))
+	if _, err := b.api.SendMessageWithKeyboard(ctx, chatID, text, rows); err != nil {
+		logx.Errorf("telegram: %v", err)
+	}
+}
+
+// volumeButtons lays out one button per volume, four per row, plus an "all" button.
+func volumeButtons(slug string, volumes []build.Volume, known map[string]string) [][]telegram.Button {
+	var rows [][]telegram.Button
+	var row []telegram.Button
+	for _, volume := range volumes {
+		label := build.VolumeTitle(volume.Label)
+		if _, ok := known[volume.Label]; ok {
+			label += " ✓"
+		}
+		row = append(row, telegram.Button{Text: label, Data: "v:" + slug + ":" + volume.Label})
+		if len(row) == 4 {
+			rows = append(rows, row)
+			row = nil
+		}
+	}
+	if len(row) > 0 {
+		rows = append(rows, row)
+	}
+	return append(rows, []telegram.Button{{Text: "Все тома", Data: "a:" + slug}})
+}
+
+// handleCallback reacts to an inline button.
+func (b *Bot) handleCallback(ctx context.Context, query *telegram.CallbackQuery) {
+	if query.Message == nil || query.Message.Chat.ID != b.allowed {
+		return
+	}
+	chatID := query.Message.Chat.ID
+	_ = b.api.AnswerCallback(ctx, query.ID, "")
+
+	parts := strings.SplitN(query.Data, ":", 3)
+	switch parts[0] {
+	case "t":
+		if len(parts) == 2 {
+			b.showVolumes(ctx, chatID, parts[1])
+		}
+	case "v":
+		if len(parts) == 3 {
+			b.enqueue(ctx, chatID, parts[1], parts[2], false)
+		}
+	case "a":
+		if len(parts) == 2 {
+			b.enqueue(ctx, chatID, parts[1], "", true)
+		}
+	}
+}
+
+// enqueue puts a build job on the queue and reports it in the chat.
+func (b *Bot) enqueue(ctx context.Context, chatID int64, slug, volumes string, all bool) {
 	logx.Infof("в очередь: %s, тома %q, все %v", slug, volumes, all)
-	messageID, err := b.api.SendMessage(ctx, message.Chat.ID, "ставлю в очередь: "+html.EscapeString(slug))
+	messageID, err := b.api.SendMessage(ctx, chatID, "ставлю в очередь: "+html.EscapeString(slug))
 	if err != nil {
+		logx.Errorf("telegram: %v", err)
 		return
 	}
 	select {
-	case b.jobs <- job{chatID: message.Chat.ID, messageID: messageID, slug: slug, volumes: volumes, all: all}:
+	case b.jobs <- job{chatID: chatID, messageID: messageID, slug: slug, volumes: volumes, all: all}:
 	default:
-		_ = b.api.EditMessage(ctx, message.Chat.ID, messageID, "очередь переполнена, попробуй позже")
+		_ = b.api.EditMessage(ctx, chatID, messageID, "очередь переполнена, попробуй позже")
 	}
 }
 

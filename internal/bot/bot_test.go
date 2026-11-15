@@ -62,3 +62,30 @@ func TestHumanSize(t *testing.T) {
 		}
 	}
 }
+
+func TestVolumeButtons(t *testing.T) {
+	volumes := []build.Volume{
+		{Label: "1", Number: 1},
+		{Label: "2", Number: 2},
+		{Label: "3", Number: 3},
+		{Label: "4", Number: 4},
+		{Label: "5", Number: 5},
+	}
+	rows := volumeButtons("1--x", volumes, map[string]string{"2": "imported"})
+
+	if len(rows) != 3 {
+		t.Fatalf("expected 3 rows, got %d", len(rows))
+	}
+	if len(rows[0]) != 4 || len(rows[1]) != 1 {
+		t.Fatalf("unexpected layout: %+v", rows)
+	}
+	if rows[0][1].Text != "Том 2 ✓" {
+		t.Errorf("built volume is not marked: %q", rows[0][1].Text)
+	}
+	if rows[0][0].Data != "v:1--x:1" {
+		t.Errorf("unexpected callback data: %q", rows[0][0].Data)
+	}
+	if rows[2][0].Data != "a:1--x" {
+		t.Errorf("unexpected all button: %+v", rows[2][0])
+	}
+}

@@ -32,8 +32,23 @@ func New(token string) *Client {
 
 // Update is one incoming update.
 type Update struct {
-	UpdateID int64    `json:"update_id"`
-	Message  *Message `json:"message"`
+	UpdateID      int64          `json:"update_id"`
+	Message       *Message       `json:"message"`
+	CallbackQuery *CallbackQuery `json:"callback_query"`
+}
+
+// CallbackQuery is a press on an inline button.
+type CallbackQuery struct {
+	ID      string   `json:"id"`
+	Data    string   `json:"data"`
+	Message *Message `json:"message"`
+	From    *User    `json:"from"`
+}
+
+// Button is one inline keyboard button.
+type Button struct {
+	Text string
+	Data string
 }
 
 // Message is an incoming message.
@@ -104,7 +119,7 @@ func (c *Client) GetUpdates(ctx context.Context, offset int64, timeout time.Dura
 	params := url.Values{}
 	params.Set("offset", strconv.FormatInt(offset, 10))
 	params.Set("timeout", strconv.Itoa(int(timeout.Seconds())))
-	params.Set("allowed_updates", `["message"]`)
+	params.Set("allowed_updates", `["message","callback_query"]`)
 
 	var updates []Update
 	if err := c.call(ctx, "getUpdates", params, &updates); err != nil {
@@ -115,17 +130,47 @@ func (c *Client) GetUpdates(ctx context.Context, offset int64, timeout time.Dura
 
 // SendMessage sends a message and returns its id.
 func (c *Client) SendMessage(ctx context.Context, chatID int64, text string) (int64, error) {
+	return c.SendMessageWithKeyboard(ctx, chatID, text, nil)
+}
+
+// SendMessageWithKeyboard sends a message with inline buttons.
+func (c *Client) SendMessageWithKeyboard(ctx context.Context, chatID int64, text string, buttons [][]Button) (int64, error) {
 	params := url.Values{}
 	params.Set("chat_id", strconv.FormatInt(chatID, 10))
 	params.Set("text", text)
 	params.Set("parse_mode", "HTML")
 	params.Set("disable_web_page_preview", "true")
+	if len(buttons) > 0 {
+		keyboard := make([][]map[string]string, 0, len(buttons))
+		for _, row := range buttons {
+			line := make([]map[string]string, 0, len(row))
+			for _, button := range row {
+				line = append(line, map[string]string{"text": button.Text, "callback_data": button.Data})
+			}
+			keyboard = append(keyboard, line)
+		}
+		payload, err := json.Marshal(map[string]any{"inline_keyboard": keyboard})
+		if err != nil {
+			return 0, err
+		}
+		params.Set("reply_markup", string(payload))
+	}
 
 	var message Message
 	if err := c.call(ctx, "sendMessage", params, &message); err != nil {
 		return 0, err
 	}
 	return message.MessageID, nil
+}
+
+// AnswerCallback stops the button spinner in the client.
+func (c *Client) AnswerCallback(ctx context.Context, id, text string) error {
+	params := url.Values{}
+	params.Set("callback_query_id", id)
+	if text != "" {
+		params.Set("text", text)
+	}
+	return c.call(ctx, "answerCallbackQuery", params, nil)
 }
 
 // EditMessage replaces the text of a message. Telegram rejects edits that change nothing, so that
