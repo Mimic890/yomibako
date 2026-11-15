@@ -151,6 +151,12 @@ CREATE TABLE IF NOT EXISTS jobs (
 	updated_at   TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS settings (
+	key        TEXT PRIMARY KEY,
+	value      TEXT NOT NULL,
+	updated_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS volumes_title_idx ON volumes (title_id);
 CREATE INDEX IF NOT EXISTS jobs_status_idx ON jobs (status);
 `
@@ -455,6 +461,28 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 			(SELECT COUNT(*) FROM subscriptions WHERE enabled = 1)`).
 		Scan(&stats.Titles, &stats.Volumes, &stats.Imported, &stats.Subscriptions)
 	return stats, err
+}
+
+// Setting returns a stored value.
+func (s *Store) Setting(ctx context.Context, key string) (string, bool, error) {
+	var value string
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = ?`, key).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return value, true, nil
+}
+
+// SetSetting stores a value.
+func (s *Store) SetSetting(ctx context.Context, key, value string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+		ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+		key, value, now())
+	return err
 }
 
 // ErrNotFound is returned when a title is missing.

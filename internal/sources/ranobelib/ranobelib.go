@@ -20,6 +20,9 @@ type Source struct {
 // New returns a RanobeLib source with the public defaults.
 func New() *Source { return &Source{Client: NewClient()} }
 
+// SetToken replaces the access token used for requests.
+func (s *Source) SetToken(token string) { s.Client.Token = token }
+
 // Name implements source.Source.
 func (s *Source) Name() string { return "ranobelib" }
 

@@ -51,6 +51,9 @@ func Run(ctx context.Context, opts Options) ([]Result, error) {
 
 	results := make([]Result, 0, len(opts.Volumes))
 	for _, volume := range opts.Volumes {
+		if err := ctx.Err(); err != nil {
+			return results, err
+		}
 		started := time.Now()
 		coverURL := opts.Covers[volume.Label]
 		if coverURL == "" {

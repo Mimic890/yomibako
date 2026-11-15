@@ -163,6 +163,23 @@ func (c *Client) SendMessageWithKeyboard(ctx context.Context, chatID int64, text
 	return message.MessageID, nil
 }
 
+// SendRichMessage sends a rich message built from blocks and returns its id.
+func (c *Client) SendRichMessage(ctx context.Context, chatID int64, blocks []map[string]any) (int64, error) {
+	payload, err := json.Marshal(map[string]any{"blocks": blocks})
+	if err != nil {
+		return 0, err
+	}
+	params := url.Values{}
+	params.Set("chat_id", strconv.FormatInt(chatID, 10))
+	params.Set("rich_message", string(payload))
+
+	var message Message
+	if err := c.call(ctx, "sendRichMessage", params, &message); err != nil {
+		return 0, err
+	}
+	return message.MessageID, nil
+}
+
 // AnswerCallback stops the button spinner in the client.
 func (c *Client) AnswerCallback(ctx context.Context, id, text string) error {
 	params := url.Values{}

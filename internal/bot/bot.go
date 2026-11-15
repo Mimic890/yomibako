@@ -8,6 +8,7 @@ import (
 	"html"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Mimic890/yomibako/internal/build"
@@ -29,6 +30,9 @@ type Bot struct {
 	st      *store.Store
 	allowed int64
 	jobs    chan job
+
+	mu     sync.Mutex
+	cancel context.CancelFunc
 }
 
 type job struct {
@@ -61,6 +65,8 @@ const helpText = `<b>Yomibako</b>
 /subscribe &lt;ссылка|slug&gt; [часы] - следить за тайтлом
 /unsubscribe &lt;ссылка|slug&gt; - перестать следить
 /status - сводка
+/cancel - прервать текущую сборку
+/token &lt;токен&gt; - обновить токен RanobeLib
 
 /add показывает список томов кнопками: жмёшь нужный - том собирается и уходит в book-dock.`
 
@@ -146,6 +152,10 @@ func (b *Bot) handle(ctx context.Context, message *telegram.Message) {
 		b.check(ctx, message.Chat.ID)
 	case "sync":
 		b.sync(ctx, message.Chat.ID)
+	case "cancel":
+		b.cancelJob(ctx, message.Chat.ID)
+	case "token":
+		b.setToken(ctx, message.Chat.ID, args)
 	case "add":
 		b.add(ctx, message.Chat.ID, args)
 	case "search":
@@ -178,28 +188,80 @@ func (b *Bot) list(ctx context.Context, chatID int64) {
 		return
 	}
 
-	var out strings.Builder
+	items := make([]map[string]any, 0, len(titles))
+	var fallback strings.Builder
 	for _, title := range titles {
-		mark := ""
-		if title.Subscription != nil && title.Subscription.Enabled {
-			mark = " 🔔"
-		}
-		fmt.Fprintf(&out, "<b>%s</b>%s\n", html.EscapeString(title.Title), mark)
-		if len(title.Volumes) == 0 {
-			out.WriteString("  томов нет\n")
-			continue
-		}
-		parts := make([]string, 0, len(title.Volumes))
+		ready, serverChapters := 0, 0
 		for _, volume := range title.Volumes {
-			label := volume.Label
-			if volume.Status == store.StatusImported {
-				label += "✓"
+			if volume.Status == store.StatusImported || volume.Status == store.StatusBuilt {
+				ready++
 			}
-			parts = append(parts, label)
+			serverChapters += volume.Chapters
 		}
-		fmt.Fprintf(&out, "  тома: %s\n", html.EscapeString(strings.Join(parts, ", ")))
+
+		totalVolumes, siteChapters := title.TotalVolumes, title.TotalChapters
+		if b.src != nil {
+			if chapters, err := b.src.Chapters(ctx, title.Slug); err == nil {
+				totalVolumes = len(build.GroupVolumes(chapters))
+				siteChapters = len(chapters)
+			}
+		}
+
+		link := map[string]any{"type": "url", "url": title.SourceURL, "text": title.Title}
+		text := []any{
+			link,
+			" · ",
+			fmt.Sprintf("%d/%d томов", ready, totalVolumes),
+			" · ",
+			fmt.Sprintf("%d/%d глав", serverChapters, siteChapters),
+		}
+		items = append(items, map[string]any{
+			"blocks": []any{map[string]any{"type": "paragraph", "text": text}},
+		})
+
+		fmt.Fprintf(&fallback, `<a href="%s">%s</a> · %d/%d томов · %d/%d глав`+"\n",
+			html.EscapeString(title.SourceURL), html.EscapeString(title.Title), ready, totalVolumes, serverChapters, siteChapters)
 	}
-	b.reply(ctx, chatID, out.String())
+
+	blocks := []map[string]any{{"type": "list", "items": items}}
+	if _, err := b.api.SendRichMessage(ctx, chatID, blocks); err != nil {
+		logx.Warnf("rich message не принят (%v), отправляю обычным", err)
+		b.reply(ctx, chatID, fallback.String())
+	}
+}
+
+func (b *Bot) cancelJob(ctx context.Context, chatID int64) {
+	b.mu.Lock()
+	cancel := b.cancel
+	b.mu.Unlock()
+	if cancel == nil {
+		b.reply(ctx, chatID, "нечего отменять")
+		return
+	}
+	cancel()
+	logx.Infof("отмена текущей сборки")
+	b.reply(ctx, chatID, "отменяю")
+}
+
+func (b *Bot) setToken(ctx context.Context, chatID int64, args []string) {
+	if len(args) == 0 {
+		b.reply(ctx, chatID, "нужен токен: /token &lt;токен&gt;")
+		return
+	}
+	token := strings.TrimSpace(args[0])
+	if len(token) < 20 {
+		b.reply(ctx, chatID, "это не похоже на токен")
+		return
+	}
+	if err := b.st.SetSetting(ctx, "ranobelib_token", token); err != nil {
+		b.reply(ctx, chatID, "ошибка базы: "+html.EscapeString(err.Error()))
+		return
+	}
+	if setter, ok := b.src.(interface{ SetToken(string) }); ok {
+		setter.SetToken(token)
+	}
+	logx.Infof("токен RanobeLib обновлён")
+	b.reply(ctx, chatID, "токен обновлён")
 }
 
 func (b *Bot) status(ctx context.Context, chatID int64) {
@@ -486,6 +548,17 @@ func (b *Bot) worker(ctx context.Context) {
 }
 
 func (b *Bot) runJob(ctx context.Context, task job) {
+	ctx, cancel := context.WithCancel(ctx)
+	b.mu.Lock()
+	b.cancel = cancel
+	b.mu.Unlock()
+	defer func() {
+		cancel()
+		b.mu.Lock()
+		b.cancel = nil
+		b.mu.Unlock()
+	}()
+
 	edit := func(text string) {
 		_ = b.api.EditMessage(ctx, task.chatID, task.messageID, text)
 	}

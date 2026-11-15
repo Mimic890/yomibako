@@ -91,6 +91,9 @@ func BuildVolume(ctx context.Context, opts Options) (Result, error) {
 	var warnings []string
 
 	for i, chapter := range opts.Volume.Chapters {
+		if err := ctx.Err(); err != nil {
+			return Result{}, err
+		}
 		progress("[%d/%d] %s", i+1, len(opts.Volume.Chapters), chapter.DisplayTitle)
 
 		content, err := opts.Source.Chapter(ctx, opts.Title.Slug, chapter)

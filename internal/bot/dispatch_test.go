@@ -46,6 +46,11 @@ func (f *fakeTelegram) handler(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": result})
 	case "getMe":
 		json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{"id": 1, "username": "testbot"}})
+	case "sendRichMessage":
+		f.mu.Lock()
+		f.sent = append(f.sent, "rich")
+		f.mu.Unlock()
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{"message_id": 8}})
 	case "sendMessage":
 		_ = r.ParseForm()
 		f.mu.Lock()
@@ -138,5 +143,68 @@ func TestBotRequiresConfiguration(t *testing.T) {
 	b := New(config.Default(), nil, st)
 	if err := b.Run(context.Background()); err == nil {
 		t.Fatal("expected an error without a token")
+	}
+}
+
+func TestBotCancelWithoutJob(t *testing.T) {
+	fake := &fakeTelegram{updates: []string{"/cancel"}}
+	server := httptest.NewServer(http.HandlerFunc(fake.handler))
+	defer server.Close()
+
+	st, err := store.Open(filepath.Join(t.TempDir(), "bot.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	cfg := config.Default()
+	cfg.Telegram = config.Telegram{Token: "test", ChatID: 42}
+
+	b := New(cfg, nil, st)
+	b.api.Base = server.URL
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go b.Run(ctx)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && len(fake.messages()) == 0 {
+		time.Sleep(20 * time.Millisecond)
+	}
+	messages := fake.messages()
+	if len(messages) == 0 || !strings.Contains(messages[0], "нечего отменять") {
+		t.Fatalf("unexpected answer: %v", messages)
+	}
+}
+
+func TestBotStoresToken(t *testing.T) {
+	fake := &fakeTelegram{updates: []string{"/token abcdefghijklmnopqrstuvwxyz"}}
+	server := httptest.NewServer(http.HandlerFunc(fake.handler))
+	defer server.Close()
+
+	st, err := store.Open(filepath.Join(t.TempDir(), "bot.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	cfg := config.Default()
+	cfg.Telegram = config.Telegram{Token: "test", ChatID: 42}
+
+	b := New(cfg, nil, st)
+	b.api.Base = server.URL
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go b.Run(ctx)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && len(fake.messages()) == 0 {
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	saved, ok, err := st.Setting(context.Background(), "ranobelib_token")
+	if err != nil || !ok || saved != "abcdefghijklmnopqrstuvwxyz" {
+		t.Fatalf("token was not stored: %q, %v, %v", saved, ok, err)
 	}
 }

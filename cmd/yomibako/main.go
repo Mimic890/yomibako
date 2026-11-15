@@ -21,6 +21,7 @@ import (
 	"github.com/Mimic890/yomibako/internal/pipeline"
 	"github.com/Mimic890/yomibako/internal/source"
 	"github.com/Mimic890/yomibako/internal/sources/ranobelib"
+	"github.com/Mimic890/yomibako/internal/store"
 )
 
 const usage = `yomibako - загрузка тайтлов в EPUB
@@ -144,6 +145,13 @@ func (c *common) load() (config.Config, *ranobelib.Source, error) {
 	client.Token = cfg.Auth.Token
 	if c.token != "" {
 		client.Token = c.token
+	}
+	// A token saved from the bot wins over the config file.
+	if st, err := store.Open(cfg.Database); err == nil {
+		if saved, ok, err := st.Setting(context.Background(), "ranobelib_token"); err == nil && ok {
+			client.Token = saved
+		}
+		st.Close()
 	}
 	cookiesFile := cfg.Auth.CookiesFile
 	if c.cookies != "" {

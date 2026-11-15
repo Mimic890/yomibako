@@ -180,3 +180,22 @@ func TestFindTitle(t *testing.T) {
 		t.Fatalf("expected nil for a missing title, got %+v", missing)
 	}
 }
+
+func TestSettings(t *testing.T) {
+	st := openTest(t)
+	ctx := context.Background()
+
+	if _, ok, err := st.Setting(ctx, "missing"); err != nil || ok {
+		t.Fatalf("unexpected result for a missing setting: %v, %v", ok, err)
+	}
+	if err := st.SetSetting(ctx, "ranobelib_token", "abc"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSetting(ctx, "ranobelib_token", "def"); err != nil {
+		t.Fatal(err)
+	}
+	value, ok, err := st.Setting(ctx, "ranobelib_token")
+	if err != nil || !ok || value != "def" {
+		t.Fatalf("unexpected setting: %q, %v, %v", value, ok, err)
+	}
+}
