@@ -39,6 +39,8 @@ type Telegram struct {
 type Auth struct {
 	Token       string `yaml:"token"`
 	CookiesFile string `yaml:"cookies_file"`
+	// Cookies is the parsed Cookie header, filled in at load time from CookiesFile.
+	Cookies string `yaml:"-"`
 }
 
 // Duration is a time.Duration that YAML writes as "600ms" instead of nanoseconds.

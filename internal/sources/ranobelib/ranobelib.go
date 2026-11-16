@@ -26,6 +26,9 @@ func (s *Source) SetToken(token string) { s.Client.Token = token }
 // Name implements source.Source.
 func (s *Source) Name() string { return "ranobelib" }
 
+// Kind implements source.Source.
+func (s *Source) Kind() source.Kind { return source.KindNovel }
+
 // Search implements source.Source.
 func (s *Source) Search(ctx context.Context, query string, page int) (source.SearchResult, error) {
 	return s.Client.Search(ctx, query, page)

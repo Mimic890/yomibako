@@ -1,6 +1,6 @@
-// Package pipeline turns selected volumes into files: it builds each EPUB, writes it either to an
-// output directory or straight into the BookOrbit dock, waits for the import when asked, and
-// records the result in the database.
+// Package pipeline turns selected chapters or volumes into files: it builds each one, writes it
+// either to an output directory or straight into the BookOrbit dock, waits for the import when
+// asked, and records the result in the database.
 package pipeline
 
 import (
@@ -23,7 +23,8 @@ type Options struct {
 	Store         *store.Store
 	Title         source.Title
 	TitleID       int64
-	Volumes       []build.Volume
+	Volumes       []build.Volume   // novels: volumes to build
+	Chapters      []source.Chapter // manga: chapters to build
 	Covers        map[string]string
 	Dock          string
 	OutDir        string
@@ -32,9 +33,11 @@ type Options struct {
 	Progress      func(format string, args ...any)
 }
 
-// Result is one written volume.
+// Result is one written file.
 type Result struct {
-	Volume   build.Volume
+	Label    string
+	Chapters int
+	Pages    int
 	Path     string
 	Size     int
 	Imported bool
@@ -42,8 +45,19 @@ type Result struct {
 	Duration time.Duration
 }
 
-// Run builds and writes every volume in order.
+// Run builds everything selected, one file at a time.
 func Run(ctx context.Context, opts Options) ([]Result, error) {
+	if opts.Source.Kind() == source.KindManga {
+		return runManga(ctx, opts)
+	}
+	return runNovel(ctx, opts)
+}
+
+func runNovel(ctx context.Context, opts Options) ([]Result, error) {
+	novel, ok := opts.Source.(source.NovelSource)
+	if !ok {
+		return nil, fmt.Errorf("источник %s не умеет отдавать текст глав", opts.Source.Name())
+	}
 	progress := opts.Progress
 	if progress == nil {
 		progress = func(string, ...any) {}
@@ -55,12 +69,14 @@ func Run(ctx context.Context, opts Options) ([]Result, error) {
 			return results, err
 		}
 		started := time.Now()
+		logx.Infof("том %s: сборка, глав %d", build.VolumeTitle(volume.Label), len(volume.Chapters))
+
 		coverURL := opts.Covers[volume.Label]
 		if coverURL == "" {
 			coverURL = opts.Title.CoverURL
 		}
 		built, err := build.BuildVolume(ctx, build.Options{
-			Source:        opts.Source,
+			Source:        novel,
 			Title:         opts.Title,
 			Volume:        volume,
 			CoverURL:      coverURL,
@@ -71,7 +87,7 @@ func Run(ctx context.Context, opts Options) ([]Result, error) {
 			return results, fmt.Errorf("%s: %w", build.VolumeTitle(volume.Label), err)
 		}
 
-		path, err := write(opts, volume, built.Bytes)
+		path, err := writeFile(opts, DockFileName(opts.Title.Title, build.VolumeTitle(volume.Label))+".epub", VolumeDirName(volume), "book.epub", built.Bytes)
 		if err != nil {
 			return results, err
 		}
@@ -88,14 +104,20 @@ func Run(ctx context.Context, opts Options) ([]Result, error) {
 		}
 
 		if opts.Store != nil {
-			if err := record(ctx, opts.Store, opts.TitleID, volume, path, len(built.Bytes), imported); err != nil {
+			if err := record(ctx, opts.Store, opts.TitleID, store.Volume{
+				Label:    volume.Label,
+				Number:   volume.Number,
+				Chapters: len(volume.Chapters),
+				Format:   "epub",
+			}, path, len(built.Bytes), imported); err != nil {
 				return results, err
 			}
 		}
 
 		logx.Infof("том %s: готово, %s, %s", build.VolumeTitle(volume.Label), humanSize(len(built.Bytes)), time.Since(started).Round(time.Second))
 		results = append(results, Result{
-			Volume:   volume,
+			Label:    build.VolumeTitle(volume.Label),
+			Chapters: len(volume.Chapters),
 			Path:     path,
 			Size:     len(built.Bytes),
 			Imported: imported,
@@ -106,19 +128,92 @@ func Run(ctx context.Context, opts Options) ([]Result, error) {
 	return results, nil
 }
 
-func write(opts Options, volume build.Volume, data []byte) (string, error) {
-	var path string
+func runManga(ctx context.Context, opts Options) ([]Result, error) {
+	manga, ok := opts.Source.(source.MangaSource)
+	if !ok {
+		return nil, fmt.Errorf("источник %s не умеет отдавать страницы глав", opts.Source.Name())
+	}
+	progress := opts.Progress
+	if progress == nil {
+		progress = func(string, ...any) {}
+	}
+
+	results := make([]Result, 0, len(opts.Chapters))
+	for _, chapter := range opts.Chapters {
+		if err := ctx.Err(); err != nil {
+			return results, err
+		}
+		started := time.Now()
+		label := ChapterLabel(chapter)
+		logx.Infof("%s: сборка", label)
+
+		path, err := targetPath(opts, DockFileName(opts.Title.Title, label)+".cbz", label, "book.cbz")
+		if err != nil {
+			return results, err
+		}
+		built, err := build.BuildChapter(ctx, build.ChapterOptions{
+			Source:   manga,
+			Title:    opts.Title,
+			Chapter:  chapter,
+			Path:     path,
+			Progress: progress,
+		})
+		if err != nil {
+			return results, fmt.Errorf("%s: %w", label, err)
+		}
+
+		imported := false
+		if opts.Dock != "" && opts.WaitForDock {
+			if err := WaitForDock(ctx, path); err != nil {
+				return results, err
+			}
+			imported = true
+		}
+
+		if opts.Store != nil {
+			if err := record(ctx, opts.Store, opts.TitleID, store.Volume{
+				Label:    chapter.Number,
+				Number:   int(chapter.Index),
+				Chapters: 1,
+				Format:   "cbz",
+			}, path, int(built.Size), imported); err != nil {
+				return results, err
+			}
+		}
+
+		logx.Infof("%s: готово, %d страниц, %s", label, built.Pages, humanSize(int(built.Size)))
+		results = append(results, Result{
+			Label:    label,
+			Chapters: 1,
+			Pages:    built.Pages,
+			Path:     path,
+			Size:     int(built.Size),
+			Imported: imported,
+			Duration: time.Since(started),
+		})
+	}
+	return results, nil
+}
+
+// targetPath decides where a file goes and creates the folder.
+func targetPath(opts Options, dockName, dirName, fileName string) (string, error) {
 	if opts.Dock != "" {
 		if err := os.MkdirAll(opts.Dock, 0o755); err != nil {
 			return "", err
 		}
-		path = filepath.Join(opts.Dock, DockFileName(opts.Title.Title, volume))
-	} else {
-		dir := filepath.Join(opts.OutDir, SafeName(opts.Title.Title), VolumeDirName(volume))
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return "", err
-		}
-		path = filepath.Join(dir, "book.epub")
+		return filepath.Join(opts.Dock, dockName), nil
+	}
+	dir := filepath.Join(opts.OutDir, SafeName(opts.Title.Title), dirName)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, fileName), nil
+}
+
+func writeFile(opts Options, dockName, dirName, fileName string, data []byte) (string, error) {
+	path, err := targetPath(opts, dockName, dirName, fileName)
+	if err != nil {
+		return "", err
 	}
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return "", err
@@ -126,7 +221,7 @@ func write(opts Options, volume build.Volume, data []byte) (string, error) {
 	return path, nil
 }
 
-func record(ctx context.Context, st *store.Store, titleID int64, volume build.Volume, path string, size int, imported bool) error {
+func record(ctx context.Context, st *store.Store, titleID int64, volume store.Volume, path string, size int, imported bool) error {
 	status := store.StatusBuilt
 	var importedAt *time.Time
 	if imported {
@@ -134,30 +229,13 @@ func record(ctx context.Context, st *store.Store, titleID int64, volume build.Vo
 		nowValue := time.Now()
 		importedAt = &nowValue
 	}
-	return st.RecordVolume(ctx, store.Volume{
-		TitleID:    titleID,
-		Label:      volume.Label,
-		Number:     volume.Number,
-		Chapters:   len(volume.Chapters),
-		Status:     status,
-		FilePath:   path,
-		SizeBytes:  int64(size),
-		BuiltAt:    time.Now(),
-		ImportedAt: importedAt,
-	})
-}
-
-func humanSize(bytes int) string {
-	const unit = 1024
-	if bytes < unit {
-		return fmt.Sprintf("%d Б", bytes)
-	}
-	div, exp := int64(unit), 0
-	for n := int64(bytes) / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %s", float64(bytes)/float64(div), []string{"КБ", "МБ", "ГБ"}[exp])
+	volume.TitleID = titleID
+	volume.Status = status
+	volume.FilePath = path
+	volume.SizeBytes = int64(size)
+	volume.BuiltAt = time.Now()
+	volume.ImportedAt = importedAt
+	return st.RecordVolume(ctx, volume)
 }
 
 // WaitForDock blocks until BookOrbit has taken the file out of the dock, which is what happens
@@ -179,10 +257,18 @@ func WaitForDock(ctx context.Context, path string) error {
 	}
 }
 
-// DockFileName is the name a volume gets inside the dock. BookOrbit reads the real metadata from
-// the EPUB itself; the name only has to be unique and readable.
-func DockFileName(title string, volume build.Volume) string {
-	return fmt.Sprintf("%s - %s.epub", SafeName(title), VolumeDirName(volume))
+// DockFileName is the name a file gets inside the dock, without the extension. BookOrbit reads the
+// real metadata from the file itself; the name only has to be unique and readable.
+func DockFileName(title, label string) string {
+	return fmt.Sprintf("%s - %s", SafeName(title), label)
+}
+
+// ChapterLabel is the human-readable name of a manga chapter.
+func ChapterLabel(chapter source.Chapter) string {
+	if chapter.Number != "" {
+		return "Глава " + chapter.Number
+	}
+	return fmt.Sprintf("Глава %g", chapter.Index)
 }
 
 // VolumeDirName is the folder name of a volume in the output directory.
@@ -205,4 +291,17 @@ func SafeName(value string) string {
 		name = string([]rune(name)[:120])
 	}
 	return strings.TrimRight(name, ". ")
+}
+
+func humanSize(bytes int) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d Б", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := int64(bytes) / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %s", float64(bytes)/float64(div), []string{"КБ", "МБ", "ГБ"}[exp])
 }

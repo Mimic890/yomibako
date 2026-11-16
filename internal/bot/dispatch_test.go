@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Mimic890/yomibako/internal/config"
+	"github.com/Mimic890/yomibako/internal/sources"
 	"github.com/Mimic890/yomibako/internal/store"
 )
 
@@ -82,7 +83,7 @@ func TestBotAnswersList(t *testing.T) {
 	cfg := config.Default()
 	cfg.Telegram = config.Telegram{Token: "test", ChatID: 42}
 
-	b := New(cfg, nil, st)
+	b := New(cfg, sources.New(cfg), st)
 	b.api.Base = server.URL
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -122,7 +123,7 @@ func TestBotIgnoresForeignChat(t *testing.T) {
 	cfg := config.Default()
 	cfg.Telegram = config.Telegram{Token: "test", ChatID: 999}
 
-	b := New(cfg, nil, st)
+	b := New(cfg, sources.New(cfg), st)
 	b.api.Base = server.URL
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -164,7 +165,7 @@ func TestBotCancelWithoutJob(t *testing.T) {
 	cfg := config.Default()
 	cfg.Telegram = config.Telegram{Token: "test", ChatID: 42}
 
-	b := New(cfg, nil, st)
+	b := New(cfg, sources.New(cfg), st)
 	b.api.Base = server.URL
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -200,7 +201,7 @@ func TestBotStoresToken(t *testing.T) {
 	cfg := config.Default()
 	cfg.Telegram = config.Telegram{Token: "test", ChatID: 42}
 
-	b := New(cfg, nil, st)
+	b := New(cfg, sources.New(cfg), st)
 	b.api.Base = server.URL
 
 	ctx, cancel := context.WithCancel(context.Background())

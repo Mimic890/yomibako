@@ -3,7 +3,6 @@ package main
 import (
 	"testing"
 
-	"github.com/Mimic890/yomibako/internal/build"
 	"github.com/Mimic890/yomibako/internal/pipeline"
 )
 
@@ -22,12 +21,11 @@ func TestParseSlug(t *testing.T) {
 }
 
 func TestDockFileName(t *testing.T) {
-	volume := build.Volume{Label: "1", Number: 1}
-	if got := pipeline.DockFileName("Повелитель тайн", volume); got != "Повелитель тайн - Том 01.epub" {
-		t.Errorf("dockFileName = %q", got)
+	if got := pipeline.DockFileName("Повелитель тайн", "Том 01"); got != "Повелитель тайн - Том 01" {
+		t.Errorf("DockFileName = %q", got)
 	}
-	if got := pipeline.DockFileName("Книга/с: слэшем", build.Volume{Label: "0"}); got != "Книга-с- слэшем - Без тома.epub" {
-		t.Errorf("dockFileName with unsafe characters = %q", got)
+	if got := pipeline.DockFileName("Книга/с: слэшем", "Без тома"); got != "Книга-с- слэшем - Без тома" {
+		t.Errorf("DockFileName with unsafe characters = %q", got)
 	}
 }
 

@@ -76,20 +76,43 @@ type ChapterContent struct {
 	Images []Image
 }
 
+// Kind tells the builder what a source produces: text chapters or image pages.
+type Kind string
+
+// Source kinds.
+const (
+	KindNovel Kind = "novel"
+	KindManga Kind = "manga"
+)
+
 // Source is a website the service can read from.
 type Source interface {
 	// Name is the stable identifier used in config and state, for example "ranobelib".
 	Name() string
+	// Kind is what the source produces.
+	Kind() Kind
 	// Search returns one page of results for a query.
 	Search(ctx context.Context, query string, page int) (SearchResult, error)
 	// Title returns the full card for a slug.
 	Title(ctx context.Context, slug string) (Title, error)
 	// Chapters returns every chapter of a title, sorted by the source's own index.
 	Chapters(ctx context.Context, slug string) ([]Chapter, error)
+	// FetchImage downloads an image and detects its media type.
+	FetchImage(ctx context.Context, url string) (Image, error)
+}
+
+// NovelSource is a source of text chapters, built into EPUB volumes.
+type NovelSource interface {
+	Source
 	// Chapter returns the rendered content of one chapter.
 	Chapter(ctx context.Context, slug string, chapter Chapter) (ChapterContent, error)
 	// VolumeCovers maps a volume label to a full-resolution cover URL.
 	VolumeCovers(ctx context.Context, slug string) (map[string]string, error)
-	// FetchImage downloads an image and detects its media type.
-	FetchImage(ctx context.Context, url string) (Image, error)
+}
+
+// MangaSource is a source of image pages, built into one CBZ per chapter.
+type MangaSource interface {
+	Source
+	// Pages returns the page images of one chapter, in reading order.
+	Pages(ctx context.Context, slug string, chapter Chapter) ([]Image, error)
 }

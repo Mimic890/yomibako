@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/Mimic890/yomibako/internal/build"
+	"github.com/Mimic890/yomibako/internal/config"
+	"github.com/Mimic890/yomibako/internal/sources"
 )
 
 func volumes() []build.Volume {
@@ -37,15 +39,27 @@ func TestSelectVolumes(t *testing.T) {
 	}
 }
 
-func TestParseSlug(t *testing.T) {
-	cases := map[string]string{
-		"lord-of-the-mysteries": "lord-of-the-mysteries",
-		"https://ranobelib.me/ru/book/20818--lord-of-the-mysteries":           "20818--lord-of-the-mysteries",
-		"https://ranobelib.me/ru/book/6777--no-game-no-life-novel?ui=9594536": "6777--no-game-no-life-novel",
+func TestResolve(t *testing.T) {
+	registry := sources.New(config.Default())
+
+	cases := []struct {
+		input  string
+		source string
+		slug   string
+	}{
+		{"lord-of-the-mysteries", "ranobelib", "lord-of-the-mysteries"},
+		{"https://ranobelib.me/ru/book/20818--lord-of-the-mysteries", "ranobelib", "20818--lord-of-the-mysteries"},
+		{"https://mangalib.me/ru/manga/4464--jujutsu-kaisen", "mangalib", "4464--jujutsu-kaisen"},
+		{"mangalib:4464--jujutsu-kaisen", "mangalib", "4464--jujutsu-kaisen"},
 	}
-	for input, want := range cases {
-		if got := parseSlug(input); got != want {
-			t.Errorf("parseSlug(%q) = %q, want %q", input, got, want)
+	for _, tc := range cases {
+		src, slug, err := registry.Resolve(tc.input)
+		if err != nil {
+			t.Errorf("Resolve(%q): %v", tc.input, err)
+			continue
+		}
+		if src.Name() != tc.source || slug != tc.slug {
+			t.Errorf("Resolve(%q) = %s, %q; want %s, %q", tc.input, src.Name(), slug, tc.source, tc.slug)
 		}
 	}
 }
@@ -71,7 +85,7 @@ func TestVolumeButtons(t *testing.T) {
 		{Label: "4", Number: 4},
 		{Label: "5", Number: 5},
 	}
-	rows := volumeButtons("1--x", volumes, map[string]string{"2": "imported"})
+	rows := volumeButtons("ranobelib", "1--x", volumes, map[string]string{"2": "imported"})
 
 	if len(rows) != 3 {
 		t.Fatalf("expected 3 rows, got %d", len(rows))
@@ -82,10 +96,10 @@ func TestVolumeButtons(t *testing.T) {
 	if rows[0][1].Text != "Том 2 ✓" {
 		t.Errorf("built volume is not marked: %q", rows[0][1].Text)
 	}
-	if rows[0][0].Data != "v:1--x:1" {
+	if rows[0][0].Data != "v:ranobelib:1--x:1" {
 		t.Errorf("unexpected callback data: %q", rows[0][0].Data)
 	}
-	if rows[2][0].Data != "a:1--x" {
+	if rows[2][0].Data != "a:ranobelib:1--x" {
 		t.Errorf("unexpected all button: %+v", rows[2][0])
 	}
 }

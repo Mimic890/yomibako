@@ -78,7 +78,7 @@ func VolumeTitle(label string) string {
 
 // Options controls one volume build.
 type Options struct {
-	Source        source.Source
+	Source        source.NovelSource
 	Title         source.Title
 	Volume        Volume
 	CoverURL      string

@@ -15,7 +15,7 @@ func runBot(args []string) error {
 		return err
 	}
 
-	cfg, src, err := c.load()
+	cfg, registry, err := c.load()
 	if err != nil {
 		return err
 	}
@@ -29,5 +29,5 @@ func runBot(args []string) error {
 	defer cancel()
 
 	logx.Infof("конфиг: база %s, book-dock %s, уровень логов %s", cfg.Database, cfg.BookDock, cfg.LogLevel)
-	return bot.New(cfg, src, st).Run(ctx)
+	return bot.New(cfg, registry, st).Run(ctx)
 }

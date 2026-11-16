@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -36,6 +37,7 @@ type Title struct {
 	SourceURL     string
 	TotalChapters int
 	TotalVolumes  int
+	Kind          string
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
 	Volumes       []Volume
@@ -50,6 +52,7 @@ type Volume struct {
 	Number     int
 	Chapters   int
 	Status     string
+	Format     string
 	FilePath   string
 	SizeBytes  int64
 	BuiltAt    time.Time
@@ -111,6 +114,7 @@ CREATE TABLE IF NOT EXISTS titles (
 	source_url     TEXT NOT NULL DEFAULT '',
 	total_chapters INTEGER NOT NULL DEFAULT 0,
 	total_volumes  INTEGER NOT NULL DEFAULT 0,
+	kind           TEXT NOT NULL DEFAULT 'novel',
 	created_at     TEXT NOT NULL,
 	updated_at     TEXT NOT NULL,
 	UNIQUE (source, slug)
@@ -123,6 +127,7 @@ CREATE TABLE IF NOT EXISTS volumes (
 	number      INTEGER NOT NULL DEFAULT 0,
 	chapters    INTEGER NOT NULL DEFAULT 0,
 	status      TEXT NOT NULL,
+	format      TEXT NOT NULL DEFAULT 'epub',
 	file_path   TEXT NOT NULL DEFAULT '',
 	size_bytes  INTEGER NOT NULL DEFAULT 0,
 	built_at    TEXT NOT NULL,
@@ -162,8 +167,20 @@ CREATE INDEX IF NOT EXISTS jobs_status_idx ON jobs (status);
 `
 
 func (s *Store) migrate() error {
-	_, err := s.db.Exec(schema)
-	return err
+	if _, err := s.db.Exec(schema); err != nil {
+		return err
+	}
+	// Columns added after the first release. SQLite has no "add column if not exists", so a
+	// duplicate-column error is expected and ignored.
+	for _, statement := range []string{
+		`ALTER TABLE titles ADD COLUMN kind TEXT NOT NULL DEFAULT 'novel'`,
+		`ALTER TABLE volumes ADD COLUMN format TEXT NOT NULL DEFAULT 'epub'`,
+	} {
+		if _, err := s.db.Exec(statement); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return err
+		}
+	}
+	return nil
 }
 
 func now() string { return time.Now().UTC().Format(time.RFC3339) }
@@ -196,8 +213,8 @@ func (s *Store) UpsertTitle(ctx context.Context, title Title) (int64, error) {
 	nowValue := now()
 
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO titles (source, slug, title, authors, cover_url, source_url, total_chapters, total_volumes, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO titles (source, slug, title, authors, cover_url, source_url, total_chapters, total_volumes, kind, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (source, slug) DO UPDATE SET
 			title = excluded.title,
 			authors = excluded.authors,
@@ -205,9 +222,10 @@ func (s *Store) UpsertTitle(ctx context.Context, title Title) (int64, error) {
 			source_url = excluded.source_url,
 			total_chapters = excluded.total_chapters,
 			total_volumes = excluded.total_volumes,
+			kind = excluded.kind,
 			updated_at = excluded.updated_at`,
 		title.Source, title.Slug, title.Title, string(authors), title.CoverURL, title.SourceURL,
-		title.TotalChapters, title.TotalVolumes, nowValue, nowValue)
+		title.TotalChapters, title.TotalVolumes, kindOrDefault(title.Kind), nowValue, nowValue)
 	if err != nil {
 		return 0, err
 	}
@@ -230,18 +248,19 @@ func (s *Store) RecordVolume(ctx context.Context, volume Volume) error {
 	}
 
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO volumes (title_id, label, number, chapters, status, file_path, size_bytes, built_at, imported_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO volumes (title_id, label, number, chapters, status, format, file_path, size_bytes, built_at, imported_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (title_id, label) DO UPDATE SET
 			number = excluded.number,
 			chapters = excluded.chapters,
 			status = excluded.status,
+			format = excluded.format,
 			file_path = excluded.file_path,
 			size_bytes = excluded.size_bytes,
 			built_at = excluded.built_at,
 			imported_at = COALESCE(excluded.imported_at, volumes.imported_at)`,
 		volume.TitleID, volume.Label, volume.Number, volume.Chapters, volume.Status,
-		volume.FilePath, volume.SizeBytes, builtAt.UTC().Format(time.RFC3339), importedAt)
+		formatOrDefault(volume.Format), volume.FilePath, volume.SizeBytes, builtAt.UTC().Format(time.RFC3339), importedAt)
 	return err
 }
 
@@ -287,7 +306,7 @@ func (s *Store) VolumeLabels(ctx context.Context, titleID int64) (map[string]str
 // Titles returns every tracked title with its volumes and subscription.
 func (s *Store) Titles(ctx context.Context) ([]Title, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, source, slug, title, authors, cover_url, source_url, total_chapters, total_volumes, created_at, updated_at
+		SELECT id, source, slug, title, authors, cover_url, source_url, total_chapters, total_volumes, kind, created_at, updated_at
 		FROM titles ORDER BY title COLLATE NOCASE`)
 	if err != nil {
 		return nil, err
@@ -303,7 +322,7 @@ func (s *Store) Titles(ctx context.Context) ([]Title, error) {
 			updated string
 		)
 		if err := rows.Scan(&title.ID, &title.Source, &title.Slug, &title.Title, &authors,
-			&title.CoverURL, &title.SourceURL, &title.TotalChapters, &title.TotalVolumes, &created, &updated); err != nil {
+			&title.CoverURL, &title.SourceURL, &title.TotalChapters, &title.TotalVolumes, &title.Kind, &created, &updated); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(authors), &title.Authors)
@@ -333,7 +352,7 @@ func (s *Store) Titles(ctx context.Context) ([]Title, error) {
 // Volumes returns every recorded volume of a title.
 func (s *Store) Volumes(ctx context.Context, titleID int64) ([]Volume, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, title_id, label, number, chapters, status, file_path, size_bytes, built_at, imported_at
+		SELECT id, title_id, label, number, chapters, status, format, file_path, size_bytes, built_at, imported_at
 		FROM volumes WHERE title_id = ? ORDER BY number, label`, titleID)
 	if err != nil {
 		return nil, err
@@ -348,7 +367,7 @@ func (s *Store) Volumes(ctx context.Context, titleID int64) ([]Volume, error) {
 			importedAt sql.NullString
 		)
 		if err := rows.Scan(&volume.ID, &volume.TitleID, &volume.Label, &volume.Number, &volume.Chapters,
-			&volume.Status, &volume.FilePath, &volume.SizeBytes, &builtAt, &importedAt); err != nil {
+			&volume.Status, &volume.Format, &volume.FilePath, &volume.SizeBytes, &builtAt, &importedAt); err != nil {
 			return nil, err
 		}
 		volume.BuiltAt = parseTime(builtAt)
@@ -432,10 +451,10 @@ func (s *Store) FindTitle(ctx context.Context, source, slug string) (*Title, err
 		updated string
 	)
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, source, slug, title, authors, cover_url, source_url, total_chapters, total_volumes, created_at, updated_at
+		SELECT id, source, slug, title, authors, cover_url, source_url, total_chapters, total_volumes, kind, created_at, updated_at
 		FROM titles WHERE source = ? AND slug = ?`, source, slug).
 		Scan(&title.ID, &title.Source, &title.Slug, &title.Title, &authors, &title.CoverURL,
-			&title.SourceURL, &title.TotalChapters, &title.TotalVolumes, &created, &updated)
+			&title.SourceURL, &title.TotalChapters, &title.TotalVolumes, &title.Kind, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -491,6 +510,20 @@ func (s *Store) SetSetting(ctx context.Context, key, value string) error {
 		ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
 		key, value, now())
 	return err
+}
+
+func kindOrDefault(kind string) string {
+	if kind == "" {
+		return "novel"
+	}
+	return kind
+}
+
+func formatOrDefault(format string) string {
+	if format == "" {
+		return "epub"
+	}
+	return format
 }
 
 // ErrNotFound is returned when a title is missing.

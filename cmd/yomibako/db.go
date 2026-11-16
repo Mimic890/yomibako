@@ -126,7 +126,11 @@ func runUnsubscribe(args []string) error {
 }
 
 func changeSubscription(c common, rawSlug string, interval int, subscribe bool) error {
-	cfg, src, err := c.load()
+	cfg, registry, err := c.load()
+	if err != nil {
+		return err
+	}
+	src, slug, err := registry.Resolve(rawSlug)
 	if err != nil {
 		return err
 	}
@@ -139,7 +143,7 @@ func changeSubscription(c common, rawSlug string, interval int, subscribe bool) 
 	ctx, cancel := contextWithSignals()
 	defer cancel()
 
-	title, err := src.Title(ctx, parseSlug(rawSlug))
+	title, err := src.Title(ctx, slug)
 	if err != nil {
 		return err
 	}
@@ -177,7 +181,7 @@ func runCheck(args []string) error {
 		return err
 	}
 
-	cfg, src, err := c.load()
+	cfg, registry, err := c.load()
 	if err != nil {
 		return err
 	}
@@ -190,7 +194,9 @@ func runCheck(args []string) error {
 	ctx, cancel := contextWithSignals()
 	defer cancel()
 
-	reports, err := check.Run(ctx, st, src)
+	reports, err := check.Run(ctx, st, func(title store.Title) (source.Source, bool) {
+		return registry.ByName(title.Source)
+	})
 	if err != nil {
 		return err
 	}

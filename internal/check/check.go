@@ -4,6 +4,7 @@ package check
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/Mimic890/yomibako/internal/build"
 	"github.com/Mimic890/yomibako/internal/source"
@@ -25,8 +26,11 @@ type TitleReport struct {
 	Err     error
 }
 
+// Resolver returns the source a stored title belongs to.
+type Resolver func(title store.Title) (source.Source, bool)
+
 // Run checks every subscription.
-func Run(ctx context.Context, st *store.Store, src source.Source) ([]TitleReport, error) {
+func Run(ctx context.Context, st *store.Store, resolve Resolver) ([]TitleReport, error) {
 	subscriptions, err := st.Subscriptions(ctx)
 	if err != nil {
 		return nil, err
@@ -35,6 +39,13 @@ func Run(ctx context.Context, st *store.Store, src source.Source) ([]TitleReport
 	reports := make([]TitleReport, 0, len(subscriptions))
 	for _, title := range subscriptions {
 		report := TitleReport{Title: title}
+
+		src, ok := resolve(title)
+		if !ok {
+			report.Err = fmt.Errorf("источник %q не настроен", title.Source)
+			reports = append(reports, report)
+			continue
+		}
 
 		chapters, err := src.Chapters(ctx, title.Slug)
 		if err != nil {

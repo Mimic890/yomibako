@@ -20,6 +20,7 @@ import (
 	"github.com/Mimic890/yomibako/internal/logx"
 	"github.com/Mimic890/yomibako/internal/pipeline"
 	"github.com/Mimic890/yomibako/internal/source"
+	"github.com/Mimic890/yomibako/internal/sources"
 	"github.com/Mimic890/yomibako/internal/sources/ranobelib"
 	"github.com/Mimic890/yomibako/internal/store"
 )
@@ -114,7 +115,7 @@ func (c *common) register(fs *flag.FlagSet) {
 	fs.BoolVar(&c.wait, "wait", false, "дождаться автофинализации (если она включена в BookOrbit)")
 }
 
-func (c *common) load() (config.Config, *ranobelib.Source, error) {
+func (c *common) load() (config.Config, *sources.Registry, error) {
 	cfg, err := config.Load(c.configPath)
 	if err != nil {
 		return cfg, nil, err
@@ -133,26 +134,17 @@ func (c *common) load() (config.Config, *ranobelib.Source, error) {
 		return cfg, nil, err
 	}
 
-	client := ranobelib.NewClient()
-	client.APIBase = cfg.APIBase
-	client.SiteBase = cfg.SiteBase
-	client.SiteID = cfg.SiteID
-	client.Interval = time.Duration(cfg.RequestInterval)
-	if cfg.UserAgent != "" {
-		client.UserAgent = cfg.UserAgent
-	}
-
-	client.Token = cfg.Auth.Token
 	if c.token != "" {
-		client.Token = c.token
+		cfg.Auth.Token = c.token
 	}
 	// A token saved from the bot wins over the config file.
 	if st, err := store.Open(cfg.Database); err == nil {
 		if saved, ok, err := st.Setting(context.Background(), "ranobelib_token"); err == nil && ok {
-			client.Token = saved
+			cfg.Auth.Token = saved
 		}
 		st.Close()
 	}
+
 	cookiesFile := cfg.Auth.CookiesFile
 	if c.cookies != "" {
 		cookiesFile = c.cookies
@@ -162,9 +154,14 @@ func (c *common) load() (config.Config, *ranobelib.Source, error) {
 		if err != nil {
 			return cfg, nil, err
 		}
-		client.Cookies = cookies
+		cfg.Auth.Cookies = cookies
 	}
-	return cfg, &ranobelib.Source{Client: client}, nil
+
+	registry := sources.New(cfg)
+	if cfg.Auth.Cookies != "" {
+		registry.SetCookies(cfg.Auth.Cookies)
+	}
+	return cfg, registry, nil
 }
 
 func contextWithSignals() (context.Context, context.CancelFunc) {
@@ -187,14 +184,14 @@ func runSearch(args []string) error {
 	}
 	query := strings.Join(fs.Args(), " ")
 
-	_, src, err := c.load()
+	_, registry, err := c.load()
 	if err != nil {
 		return err
 	}
 	ctx, cancel := contextWithSignals()
 	defer cancel()
 
-	result, err := src.Search(ctx, query, *page)
+	result, err := registry.Default().Search(ctx, query, *page)
 	if err != nil {
 		return err
 	}
@@ -239,9 +236,11 @@ func runInfo(args []string) error {
 	if fs.NArg() == 0 {
 		return errors.New("нужен slug или ссылка")
 	}
-	slug := parseSlug(fs.Arg(0))
-
-	_, src, err := c.load()
+	_, registry, err := c.load()
+	if err != nil {
+		return err
+	}
+	src, slug, err := registry.Resolve(fs.Arg(0))
 	if err != nil {
 		return err
 	}
@@ -286,9 +285,11 @@ func runVolumes(args []string) error {
 	if fs.NArg() == 0 {
 		return errors.New("нужен slug или ссылка")
 	}
-	slug := parseSlug(fs.Arg(0))
-
-	_, src, err := c.load()
+	_, registry, err := c.load()
+	if err != nil {
+		return err
+	}
+	src, slug, err := registry.Resolve(fs.Arg(0))
 	if err != nil {
 		return err
 	}
@@ -320,7 +321,8 @@ func runAdd(args []string) error {
 	var c common
 	c.register(fs)
 	volumeList := fs.String("volume", "", "номера томов через запятую")
-	all := fs.Bool("all", false, "все тома")
+	chapterList := fs.String("chapter", "", "номера глав через запятую или диапазон 1-10")
+	all := fs.Bool("all", false, "все тома или главы")
 	limit := fs.Int("limit", 0, "ограничить число глав в томе")
 	if err := fs.Parse(reorderArgs(args)); err != nil {
 		return err
@@ -328,9 +330,11 @@ func runAdd(args []string) error {
 	if fs.NArg() == 0 {
 		return errors.New("нужен slug или ссылка")
 	}
-	slug := parseSlug(fs.Arg(0))
-
-	cfg, src, err := c.load()
+	cfg, registry, err := c.load()
+	if err != nil {
+		return err
+	}
+	src, slug, err := registry.Resolve(fs.Arg(0))
 	if err != nil {
 		return err
 	}
@@ -356,20 +360,55 @@ func runAdd(args []string) error {
 		return errors.New("у тайтла нет глав")
 	}
 
-	selected, err := selectVolumes(volumes, *volumeList, *all)
-	if err != nil {
-		return err
-	}
-
 	titleID, err := recordTitle(ctx, st, src, title, len(chapters), len(volumes))
 	if err != nil {
 		return err
 	}
 
-	covers, err := src.VolumeCovers(ctx, title.Slug)
+	if src.Kind() == source.KindManga {
+		selected, err := selectChapters(chapters, *chapterList, *all)
+		if err != nil {
+			return err
+		}
+		dir := cfg.BookDock
+		if dir == "" {
+			dir = filepath.Join(cfg.OutputDir, pipeline.SafeName(title.Title))
+		}
+		fmt.Printf("%s\n%s\n\n", title.Title, dir)
+		results, err := pipeline.Run(ctx, pipeline.Options{
+			Source:   src,
+			Store:    st,
+			Title:    title,
+			TitleID:  titleID,
+			Chapters: selected,
+			Dock:     cfg.BookDock,
+			OutDir:   cfg.OutputDir,
+			Progress: func(format string, args ...any) {
+				fmt.Fprintf(os.Stderr, "  "+format+"\n", args...)
+			},
+		})
+		for _, result := range results {
+			fmt.Printf("%s: %d страниц, %s, %s\n", result.Label, result.Pages, humanSize(result.Size), result.Duration.Round(time.Second))
+			fmt.Println("  ->", result.Path)
+		}
+		return err
+	}
+
+	selected, err := selectVolumes(volumes, *volumeList, *all)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "предупреждение: обложки томов недоступны:", err)
-		covers = map[string]string{}
+		return err
+	}
+	if err != nil {
+		return err
+	}
+
+	covers := map[string]string{}
+	if novel, ok := src.(source.NovelSource); ok {
+		if found, err := novel.VolumeCovers(ctx, title.Slug); err == nil {
+			covers = found
+		} else {
+			fmt.Fprintln(os.Stderr, "предупреждение: обложки томов недоступны:", err)
+		}
 	}
 
 	dir := filepath.Join(cfg.OutputDir, pipeline.SafeName(title.Title))
@@ -400,7 +439,11 @@ func runAdd(args []string) error {
 		},
 	})
 	for _, result := range results {
-		fmt.Printf("%s: %d глав, %s, %s\n", build.VolumeTitle(result.Volume.Label), len(result.Volume.Chapters),
+		detail := fmt.Sprintf("%d глав", result.Chapters)
+		if result.Pages > 0 {
+			detail = fmt.Sprintf("%d страниц", result.Pages)
+		}
+		fmt.Printf("%s: %s, %s, %s\n", result.Label, detail,
 			humanSize(result.Size), result.Duration.Round(time.Second))
 		for _, warning := range result.Warnings {
 			fmt.Fprintln(os.Stderr, "  предупреждение:", warning)
@@ -414,6 +457,48 @@ func runAdd(args []string) error {
 		return err
 	}
 	return nil
+}
+
+// selectChapters parses "1,2,3", "1-10" or "all". Without a list the first chapter is built.
+func selectChapters(chapters []source.Chapter, list string, all bool) ([]source.Chapter, error) {
+	if all {
+		return chapters, nil
+	}
+	list = strings.TrimSpace(list)
+	if list == "" {
+		return chapters[:1], nil
+	}
+
+	wanted := make(map[string]bool)
+	for _, part := range strings.Split(list, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if from, to, ok := strings.Cut(part, "-"); ok {
+			start, err1 := strconv.Atoi(strings.TrimSpace(from))
+			end, err2 := strconv.Atoi(strings.TrimSpace(to))
+			if err1 != nil || err2 != nil || end < start {
+				return nil, fmt.Errorf("не разобрал диапазон %q", part)
+			}
+			for n := start; n <= end; n++ {
+				wanted[strconv.Itoa(n)] = true
+			}
+			continue
+		}
+		wanted[part] = true
+	}
+
+	var out []source.Chapter
+	for _, chapter := range chapters {
+		if wanted[chapter.Number] {
+			out = append(out, chapter)
+		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("глав %q нет", list)
+	}
+	return out, nil
 }
 
 func selectVolumes(volumes []build.Volume, list string, all bool) ([]build.Volume, error) {

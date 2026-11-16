@@ -26,6 +26,9 @@ const (
 	DefaultTimeout         = 25 * time.Second
 	DefaultMaxImageBytes   = 30 << 20
 
+	// Page images of manga chapters are served from this host; the API returns host-less paths.
+	DefaultImageBase = "https://img3.cdnlibs.org"
+
 	// The API answers 403 to requests that look like a bare script, so every request carries a
 	// browser user agent and a referer from the site itself.
 	DefaultUserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -230,6 +233,56 @@ func (c *Client) ChapterContent(ctx context.Context, slug string, chapter Chapte
 		return chapterContent{}, err
 	}
 	return payload.Data, nil
+}
+
+// PageRef is one page of a manga chapter.
+type PageRef struct {
+	URL    string
+	Width  int
+	Height int
+}
+
+// ChapterPages returns the page images of a manga chapter, in reading order.
+func (c *Client) ChapterPages(ctx context.Context, slug string, chapter Chapter) ([]PageRef, error) {
+	if strings.TrimSpace(chapter.Number) == "" {
+		return nil, errors.New("chapter has no number")
+	}
+	params := url.Values{}
+	params.Set("number", chapter.Number)
+	if chapter.Volume != "" {
+		params.Set("volume", chapter.Volume)
+	}
+	if chapter.BranchID > 0 {
+		params.Set("branch_id", strconv.Itoa(chapter.BranchID))
+	}
+
+	var payload struct {
+		Data struct {
+			Pages []struct {
+				URL    string `json:"url"`
+				Width  int    `json:"width"`
+				Height int    `json:"height"`
+			} `json:"pages"`
+		} `json:"data"`
+	}
+	if err := c.getJSON(ctx, c.endpoint("/manga/"+url.PathEscape(slug)+"/chapter", params), &payload); err != nil {
+		return nil, err
+	}
+
+	pages := make([]PageRef, 0, len(payload.Data.Pages))
+	for _, page := range payload.Data.Pages {
+		raw := strings.TrimSpace(page.URL)
+		if raw == "" {
+			continue
+		}
+		if strings.HasPrefix(raw, "//") {
+			raw = DefaultImageBase + "/" + strings.TrimPrefix(raw, "//")
+		} else if !strings.HasPrefix(raw, "http") {
+			raw = DefaultImageBase + "/" + strings.TrimPrefix(raw, "/")
+		}
+		pages = append(pages, PageRef{URL: raw, Width: page.Width, Height: page.Height})
+	}
+	return pages, nil
 }
 
 // Covers returns the per-volume covers of a title.

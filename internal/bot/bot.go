@@ -20,18 +20,19 @@ import (
 	"github.com/Mimic890/yomibako/internal/pipeline"
 	"github.com/Mimic890/yomibako/internal/reconcile"
 	"github.com/Mimic890/yomibako/internal/source"
+	"github.com/Mimic890/yomibako/internal/sources"
 	"github.com/Mimic890/yomibako/internal/store"
 	"github.com/Mimic890/yomibako/internal/telegram"
 )
 
 // Bot serves one chat.
 type Bot struct {
-	api     *telegram.Client
-	cfg     config.Config
-	src     source.Source
-	st      *store.Store
-	allowed int64
-	jobs    chan job
+	api      *telegram.Client
+	cfg      config.Config
+	registry *sources.Registry
+	st       *store.Store
+	allowed  int64
+	jobs     chan job
 
 	mu      sync.Mutex
 	cancel  context.CancelFunc
@@ -41,37 +42,41 @@ type Bot struct {
 // pendingJob is a build waiting for confirmation. It is kept in memory: a confirmation that
 // outlives a restart is not worth persisting.
 type pendingJob struct {
-	slug    string
-	volumes []string
-	all     bool
-	created time.Time
+	source   string
+	slug     string
+	volumes  []string
+	chapters []string
+	all      bool
+	created  time.Time
 }
 
 type job struct {
 	chatID    int64
 	messageID int64
+	source    string
 	slug      string
 	volumes   string
+	chapters  []string
 	all       bool
 }
 
 // New builds a bot from the configuration.
-func New(cfg config.Config, src source.Source, st *store.Store) *Bot {
+func New(cfg config.Config, registry *sources.Registry, st *store.Store) *Bot {
 	return &Bot{
-		api:     telegram.New(cfg.Telegram.Token),
-		cfg:     cfg,
-		src:     src,
-		st:      st,
-		allowed: cfg.Telegram.ChatID,
-		jobs:    make(chan job, 8),
-		pending: make(map[string]pendingJob),
+		api:      telegram.New(cfg.Telegram.Token),
+		cfg:      cfg,
+		registry: registry,
+		st:       st,
+		allowed:  cfg.Telegram.ChatID,
+		jobs:     make(chan job, 8),
+		pending:  make(map[string]pendingJob),
 	}
 }
 
 const helpText = `<b>Yomibako</b>
 
 /list - что уже в базе
-/add &lt;название|ссылка&gt; - выбрать тома и собрать
+/add &lt;название|ссылка&gt; - выбрать тома или главы и собрать
 /search &lt;запрос&gt; - найти тайтл
 /check - новые тома и новые главы
 /sync - сверить базу с библиотекой
@@ -81,7 +86,7 @@ const helpText = `<b>Yomibako</b>
 /cancel - прервать текущую сборку
 /token &lt;токен&gt; - обновить токен RanobeLib
 
-/add показывает список томов кнопками: жмёшь нужный - том собирается и уходит в book-dock.`
+Ссылку можно давать любую: ranobelib.me, mangalib.me, hentailib.me. Без ссылки ищет на RanobeLib.`
 
 // Run polls for updates until the context is cancelled.
 func (b *Bot) Run(ctx context.Context) error {
@@ -104,7 +109,7 @@ func (b *Bot) Run(ctx context.Context) error {
 
 	_ = b.api.SetMyCommands(ctx, [][2]string{
 		{"list", "что уже в базе"},
-		{"add", "собрать том и отдать в BookOrbit"},
+		{"add", "собрать том или главу и отдать в BookOrbit"},
 		{"search", "найти тайтл"},
 		{"check", "новые тома и главы"},
 		{"sync", "сверить базу с библиотекой"},
@@ -220,28 +225,36 @@ func (b *Bot) list(ctx context.Context, chatID int64) {
 			serverChapters += volume.Chapters
 		}
 
-		totalVolumes, siteChapters, variants := title.TotalVolumes, title.TotalChapters, 0
-		if b.src != nil {
-			if chapters, err := b.src.Chapters(ctx, title.Slug); err == nil {
-				groups := build.GroupVolumes(chapters)
-				totalVolumes = len(groups)
+		totalUnits, siteChapters, variants := title.TotalVolumes, title.TotalChapters, 0
+		if src, ok := b.registry.ByName(title.Source); ok {
+			if chapters, err := src.Chapters(ctx, title.Slug); err == nil {
 				siteChapters = len(chapters)
-				variants = build.Variants(chapters)
-				// A volume adopted from the library has no chapter count; fill it in while the
-				// list is being built, so the numbers become right without a separate command.
-				onSite := make(map[string]int, len(groups))
-				for _, group := range groups {
-					onSite[group.Label] = len(group.Chapters)
-				}
-				for _, volume := range title.Volumes {
-					if volume.Chapters == 0 && onSite[volume.Label] > 0 {
-						_ = b.st.SetVolumeChapters(ctx, title.ID, volume.Label, onSite[volume.Label])
-						serverChapters += onSite[volume.Label]
+				if src.Kind() == source.KindManga {
+					totalUnits = len(chapters)
+				} else {
+					groups := build.GroupVolumes(chapters)
+					totalUnits = len(groups)
+					variants = build.Variants(chapters)
+					// A volume adopted from the library has no chapter count; fill it in while
+					// the list is being built, so the numbers become right on their own.
+					onSite := make(map[string]int, len(groups))
+					for _, group := range groups {
+						onSite[group.Label] = len(group.Chapters)
+					}
+					for _, volume := range title.Volumes {
+						if volume.Chapters == 0 && onSite[volume.Label] > 0 {
+							_ = b.st.SetVolumeChapters(ctx, title.ID, volume.Label, onSite[volume.Label])
+							serverChapters += onSite[volume.Label]
+						}
 					}
 				}
 			}
 		}
 
+		unitName := "томов"
+		if title.Kind == string(source.KindManga) {
+			unitName = "глав"
+		}
 		chaptersLabel := fmt.Sprintf("%d/%d глав", serverChapters, siteChapters)
 		if variants > siteChapters {
 			chaptersLabel += fmt.Sprintf(" (%d с переводами)", variants)
@@ -251,7 +264,7 @@ func (b *Bot) list(ctx context.Context, chatID int64) {
 		text := []any{
 			link,
 			" · ",
-			fmt.Sprintf("%d/%d томов", ready, totalVolumes),
+			fmt.Sprintf("%d/%d %s", ready, totalUnits, unitName),
 			" · ",
 			chaptersLabel,
 		}
@@ -259,8 +272,8 @@ func (b *Bot) list(ctx context.Context, chatID int64) {
 			"blocks": []any{map[string]any{"type": "paragraph", "text": text}},
 		})
 
-		fmt.Fprintf(&fallback, `<a href="%s">%s</a> · %d/%d томов · %s`+"\n",
-			html.EscapeString(title.SourceURL), html.EscapeString(title.Title), ready, totalVolumes, html.EscapeString(chaptersLabel))
+		fmt.Fprintf(&fallback, `<a href="%s">%s</a> · %d/%d %s · %s`+"\n",
+			html.EscapeString(title.SourceURL), html.EscapeString(title.Title), ready, totalUnits, unitName, html.EscapeString(chaptersLabel))
 	}
 
 	blocks := []map[string]any{{"type": "list", "items": items}}
@@ -268,6 +281,73 @@ func (b *Bot) list(ctx context.Context, chatID int64) {
 		logx.Warnf("rich message не принят (%v), отправляю обычным", err)
 		b.reply(ctx, chatID, fallback.String())
 	}
+}
+
+func (b *Bot) status(ctx context.Context, chatID int64) {
+	stats, err := b.st.Stats(ctx)
+	if err != nil {
+		b.reply(ctx, chatID, "ошибка базы: "+html.EscapeString(err.Error()))
+		return
+	}
+	text := fmt.Sprintf("тайтлов: %d\nтомов и глав: %d (импортировано %d)\nподписок: %d",
+		stats.Titles, stats.Volumes, stats.Imported, stats.Subscriptions)
+	if stats.Missing > 0 {
+		text += fmt.Sprintf("\nнет в библиотеке: %d", stats.Missing)
+	}
+	b.reply(ctx, chatID, text)
+}
+
+func (b *Bot) check(ctx context.Context, chatID int64) {
+	reports, err := check.Run(ctx, b.st, func(title store.Title) (source.Source, bool) {
+		return b.registry.ByName(title.Source)
+	})
+	if err != nil {
+		b.reply(ctx, chatID, "ошибка базы: "+html.EscapeString(err.Error()))
+		return
+	}
+	if len(reports) == 0 {
+		b.reply(ctx, chatID, "подписок нет")
+		return
+	}
+
+	var out strings.Builder
+	newUnits, updated := 0, 0
+	for _, report := range reports {
+		name := html.EscapeString(report.Title.Title)
+		if report.Err != nil {
+			fmt.Fprintf(&out, "%s: ошибка %s\n", name, html.EscapeString(report.Err.Error()))
+			continue
+		}
+		if len(report.New) == 0 && len(report.Updated) == 0 {
+			fmt.Fprintf(&out, "%s: без изменений\n", name)
+			continue
+		}
+		fmt.Fprintf(&out, "<b>%s</b>\n", name)
+		for _, volume := range report.New {
+			newUnits++
+			fmt.Fprintf(&out, "  новый том %s (%d глав)\n", html.EscapeString(volume.Label), len(volume.Chapters))
+		}
+		for _, update := range report.Updated {
+			updated++
+			fmt.Fprintf(&out, "  том %s: %d глав из %d\n", html.EscapeString(update.Label), update.Have, update.Site)
+		}
+	}
+	if newUnits == 0 && updated == 0 {
+		out.WriteString("\nнового нет")
+	} else {
+		fmt.Fprintf(&out, "\nновых томов: %d, томов с новыми главами: %d", newUnits, updated)
+	}
+	b.reply(ctx, chatID, out.String())
+}
+
+func (b *Bot) sync(ctx context.Context, chatID int64) {
+	report, err := reconcile.Run(ctx, b.st, b.cfg.LibraryDir)
+	if err != nil {
+		b.reply(ctx, chatID, "ошибка: "+html.EscapeString(err.Error()))
+		return
+	}
+	b.reply(ctx, chatID, fmt.Sprintf("сверено с библиотекой\nимпортировано: %d\nнет на диске: %d\nдобавлено из библиотеки: %d",
+		report.Imported, report.Missing, report.Adopted))
 }
 
 func (b *Bot) cancelJob(ctx context.Context, chatID int64) {
@@ -297,76 +377,9 @@ func (b *Bot) setToken(ctx context.Context, chatID int64, args []string) {
 		b.reply(ctx, chatID, "ошибка базы: "+html.EscapeString(err.Error()))
 		return
 	}
-	if setter, ok := b.src.(interface{ SetToken(string) }); ok {
-		setter.SetToken(token)
-	}
-	logx.Infof("токен RanobeLib обновлён")
+	b.registry.SetToken(token)
+	logx.Infof("токен обновлён")
 	b.reply(ctx, chatID, "токен обновлён")
-}
-
-func (b *Bot) status(ctx context.Context, chatID int64) {
-	stats, err := b.st.Stats(ctx)
-	if err != nil {
-		b.reply(ctx, chatID, "ошибка базы: "+html.EscapeString(err.Error()))
-		return
-	}
-	text := fmt.Sprintf("тайтлов: %d\nтомов: %d (импортировано %d)\nподписок: %d",
-		stats.Titles, stats.Volumes, stats.Imported, stats.Subscriptions)
-	if stats.Missing > 0 {
-		text += fmt.Sprintf("\nнет в библиотеке: %d", stats.Missing)
-	}
-	b.reply(ctx, chatID, text)
-}
-
-func (b *Bot) check(ctx context.Context, chatID int64) {
-	reports, err := check.Run(ctx, b.st, b.src)
-	if err != nil {
-		b.reply(ctx, chatID, "ошибка базы: "+html.EscapeString(err.Error()))
-		return
-	}
-	if len(reports) == 0 {
-		b.reply(ctx, chatID, "подписок нет")
-		return
-	}
-
-	var out strings.Builder
-	newVolumes, updated := 0, 0
-	for _, report := range reports {
-		name := html.EscapeString(report.Title.Title)
-		if report.Err != nil {
-			fmt.Fprintf(&out, "%s: ошибка %s\n", name, html.EscapeString(report.Err.Error()))
-			continue
-		}
-		if len(report.New) == 0 && len(report.Updated) == 0 {
-			fmt.Fprintf(&out, "%s: без изменений\n", name)
-			continue
-		}
-		fmt.Fprintf(&out, "<b>%s</b>\n", name)
-		for _, volume := range report.New {
-			newVolumes++
-			fmt.Fprintf(&out, "  новый том %s (%d глав)\n", html.EscapeString(volume.Label), len(volume.Chapters))
-		}
-		for _, update := range report.Updated {
-			updated++
-			fmt.Fprintf(&out, "  том %s: %d глав из %d\n", html.EscapeString(update.Label), update.Have, update.Site)
-		}
-	}
-	if newVolumes == 0 && updated == 0 {
-		out.WriteString("\nнового нет")
-	} else {
-		fmt.Fprintf(&out, "\nновых томов: %d, томов с новыми главами: %d", newVolumes, updated)
-	}
-	b.reply(ctx, chatID, out.String())
-}
-
-func (b *Bot) sync(ctx context.Context, chatID int64) {
-	report, err := reconcile.Run(ctx, b.st, b.cfg.LibraryDir)
-	if err != nil {
-		b.reply(ctx, chatID, "ошибка: "+html.EscapeString(err.Error()))
-		return
-	}
-	b.reply(ctx, chatID, fmt.Sprintf("сверено с библиотекой\nимпортировано: %d\nнет на диске: %d\nдобавлено из библиотеки: %d",
-		report.Imported, report.Missing, report.Adopted))
 }
 
 func (b *Bot) add(ctx context.Context, chatID int64, args []string) {
@@ -380,13 +393,18 @@ func (b *Bot) add(ctx context.Context, chatID int64, args []string) {
 	}
 
 	query := strings.Join(args, " ")
-	title, err := b.src.Title(ctx, parseSlug(query))
+	src, slug, err := b.registry.Resolve(query)
 	if err != nil {
-		// Not a slug: search and let the user pick the title first.
-		b.search(ctx, chatID, args)
+		b.reply(ctx, chatID, html.EscapeString(err.Error()))
 		return
 	}
-	b.showVolumes(ctx, chatID, title.Slug)
+	title, err := src.Title(ctx, slug)
+	if err != nil {
+		// Not a slug: search and let the user pick the title first.
+		b.searchWith(ctx, chatID, src, args)
+		return
+	}
+	b.showUnits(ctx, chatID, src, title.Slug, 1)
 }
 
 // search lists matching titles as buttons.
@@ -395,8 +413,12 @@ func (b *Bot) search(ctx context.Context, chatID int64, args []string) {
 		b.reply(ctx, chatID, "нужен поисковый запрос")
 		return
 	}
+	b.searchWith(ctx, chatID, b.registry.Default(), args)
+}
+
+func (b *Bot) searchWith(ctx context.Context, chatID int64, src source.Source, args []string) {
 	query := strings.Join(args, " ")
-	result, err := b.src.Search(ctx, query, 1)
+	result, err := src.Search(ctx, query, 1)
 	if err != nil {
 		b.reply(ctx, chatID, "ошибка поиска: "+html.EscapeString(err.Error()))
 		return
@@ -411,22 +433,29 @@ func (b *Bot) search(ctx context.Context, chatID int64, args []string) {
 		if i >= 8 {
 			break
 		}
-		rows = append(rows, []telegram.Button{{Text: item.Title, Data: "t:" + item.Slug}})
+		rows = append(rows, []telegram.Button{{Text: item.Title, Data: "t:" + src.Name() + ":" + item.Slug}})
 	}
-	_, err = b.api.SendMessageWithKeyboard(ctx, chatID, "выбери тайтл:", rows)
-	if err != nil {
+	if _, err := b.api.SendMessageWithKeyboard(ctx, chatID, "выбери тайтл:", rows); err != nil {
 		logx.Errorf("telegram: %v", err)
 	}
 }
 
-// showVolumes lists the volumes of a title as buttons.
-func (b *Bot) showVolumes(ctx context.Context, chatID int64, slug string) {
-	title, err := b.src.Title(ctx, slug)
+// showUnits lists volumes of a novel or chapters of a manga.
+func (b *Bot) showUnits(ctx context.Context, chatID int64, src source.Source, slug string, page int) {
+	if src.Kind() == source.KindManga {
+		b.showChapters(ctx, chatID, src, slug, page)
+		return
+	}
+	b.showVolumes(ctx, chatID, src, slug)
+}
+
+func (b *Bot) showVolumes(ctx context.Context, chatID int64, src source.Source, slug string) {
+	title, err := src.Title(ctx, slug)
 	if err != nil {
 		b.reply(ctx, chatID, "не нашёл: "+html.EscapeString(err.Error()))
 		return
 	}
-	chapters, err := b.src.Chapters(ctx, title.Slug)
+	chapters, err := src.Chapters(ctx, title.Slug)
 	if err != nil {
 		b.reply(ctx, chatID, "ошибка: "+html.EscapeString(err.Error()))
 		return
@@ -438,7 +467,7 @@ func (b *Bot) showVolumes(ctx context.Context, chatID int64, slug string) {
 	}
 
 	titleID, err := b.st.UpsertTitle(ctx, store.Title{
-		Source:        b.src.Name(),
+		Source:        src.Name(),
 		Slug:          title.Slug,
 		Title:         title.Title,
 		Authors:       title.Authors,
@@ -446,6 +475,7 @@ func (b *Bot) showVolumes(ctx context.Context, chatID int64, slug string) {
 		SourceURL:     title.SourceURL,
 		TotalChapters: len(chapters),
 		TotalVolumes:  len(volumes),
+		Kind:          string(source.KindNovel),
 	})
 	// Only volumes that are actually on disk get a tick: a volume marked missing was deleted from
 	// the library and can be built again.
@@ -460,7 +490,7 @@ func (b *Bot) showVolumes(ctx context.Context, chatID int64, slug string) {
 		}
 	}
 
-	rows := volumeButtons(title.Slug, volumes, known)
+	rows := volumeButtons(src.Name(), title.Slug, volumes, known)
 
 	text := fmt.Sprintf("<b>%s</b>\nтомов: %d, глав: %d\n\nвыбери том:", html.EscapeString(title.Title), len(volumes), len(chapters))
 	if _, err := b.api.SendMessageWithKeyboard(ctx, chatID, text, rows); err != nil {
@@ -469,7 +499,7 @@ func (b *Bot) showVolumes(ctx context.Context, chatID int64, slug string) {
 }
 
 // volumeButtons lays out one button per volume, four per row, plus an "all" button.
-func volumeButtons(slug string, volumes []build.Volume, known map[string]string) [][]telegram.Button {
+func volumeButtons(sourceName, slug string, volumes []build.Volume, known map[string]string) [][]telegram.Button {
 	var rows [][]telegram.Button
 	var row []telegram.Button
 	for _, volume := range volumes {
@@ -477,7 +507,7 @@ func volumeButtons(slug string, volumes []build.Volume, known map[string]string)
 		if _, ok := known[volume.Label]; ok {
 			label += " ✓"
 		}
-		row = append(row, telegram.Button{Text: label, Data: "v:" + slug + ":" + volume.Label})
+		row = append(row, telegram.Button{Text: label, Data: "v:" + sourceName + ":" + slug + ":" + volume.Label})
 		if len(row) == 4 {
 			rows = append(rows, row)
 			row = nil
@@ -486,7 +516,7 @@ func volumeButtons(slug string, volumes []build.Volume, known map[string]string)
 	if len(row) > 0 {
 		rows = append(rows, row)
 	}
-	return append(rows, []telegram.Button{{Text: "Все тома", Data: "a:" + slug}})
+	return append(rows, []telegram.Button{{Text: "Все тома", Data: "a:" + sourceName + ":" + slug}})
 }
 
 // handleCallback reacts to an inline button.
@@ -497,19 +527,32 @@ func (b *Bot) handleCallback(ctx context.Context, query *telegram.CallbackQuery)
 	chatID := query.Message.Chat.ID
 	_ = b.api.AnswerCallback(ctx, query.ID, "")
 
-	parts := strings.SplitN(query.Data, ":", 3)
+	parts := strings.Split(query.Data, ":")
 	switch parts[0] {
 	case "t":
-		if len(parts) == 2 {
-			b.showVolumes(ctx, chatID, parts[1])
+		if len(parts) == 3 {
+			if src, ok := b.registry.ByName(parts[1]); ok {
+				b.showUnits(ctx, chatID, src, parts[2], 1)
+			}
+		}
+	case "p":
+		if len(parts) == 4 {
+			if src, ok := b.registry.ByName(parts[1]); ok {
+				page, _ := strconv.Atoi(parts[3])
+				b.showUnits(ctx, chatID, src, parts[2], page)
+			}
 		}
 	case "v":
-		if len(parts) == 3 {
-			b.confirm(ctx, chatID, parts[1], []string{parts[2]}, false)
+		if len(parts) == 4 {
+			if src, ok := b.registry.ByName(parts[1]); ok {
+				b.confirm(ctx, chatID, src, parts[2], []string{parts[3]}, false)
+			}
 		}
 	case "a":
-		if len(parts) == 2 {
-			b.confirm(ctx, chatID, parts[1], nil, true)
+		if len(parts) == 3 {
+			if src, ok := b.registry.ByName(parts[1]); ok {
+				b.confirm(ctx, chatID, src, parts[2], nil, true)
+			}
 		}
 	case "go":
 		if len(parts) == 2 {
@@ -519,13 +562,17 @@ func (b *Bot) handleCallback(ctx context.Context, query *telegram.CallbackQuery)
 }
 
 // confirm shows what is about to be downloaded and waits for a button press.
-func (b *Bot) confirm(ctx context.Context, chatID int64, slug string, volumes []string, all bool) {
-	title, err := b.src.Title(ctx, slug)
+func (b *Bot) confirm(ctx context.Context, chatID int64, src source.Source, slug string, units []string, all bool) {
+	if src.Kind() == source.KindManga {
+		b.confirmChapters(ctx, chatID, src, slug, units, all)
+		return
+	}
+	title, err := src.Title(ctx, slug)
 	if err != nil {
 		b.reply(ctx, chatID, "не нашёл: "+html.EscapeString(err.Error()))
 		return
 	}
-	chapters, err := b.src.Chapters(ctx, title.Slug)
+	chapters, err := src.Chapters(ctx, title.Slug)
 	if err != nil {
 		b.reply(ctx, chatID, "ошибка: "+html.EscapeString(err.Error()))
 		return
@@ -533,7 +580,7 @@ func (b *Bot) confirm(ctx context.Context, chatID int64, slug string, volumes []
 	groups := build.GroupVolumes(chapters)
 
 	titleID, _ := b.st.UpsertTitle(ctx, store.Title{
-		Source:        b.src.Name(),
+		Source:        src.Name(),
 		Slug:          title.Slug,
 		Title:         title.Title,
 		Authors:       title.Authors,
@@ -541,6 +588,7 @@ func (b *Bot) confirm(ctx context.Context, chatID int64, slug string, volumes []
 		SourceURL:     title.SourceURL,
 		TotalChapters: len(chapters),
 		TotalVolumes:  len(groups),
+		Kind:          string(source.KindNovel),
 	})
 	present := map[string]bool{}
 	if labels, err := b.st.VolumeLabels(ctx, titleID); err == nil {
@@ -560,7 +608,7 @@ func (b *Bot) confirm(ctx context.Context, chatID int64, slug string, volumes []
 		}
 	} else {
 		for _, group := range groups {
-			if len(volumes) > 0 && group.Label == volumes[0] {
+			if len(units) > 0 && group.Label == units[0] {
 				selected = append(selected, group)
 			}
 		}
@@ -596,11 +644,11 @@ func (b *Bot) confirm(ctx context.Context, chatID int64, slug string, volumes []
 	for _, group := range selected {
 		labels = append(labels, group.Label)
 	}
-	token := b.remember(pendingJob{slug: title.Slug, volumes: labels, all: all, created: time.Now()})
+	token := b.remember(pendingJob{source: src.Name(), slug: title.Slug, volumes: labels, all: all, created: time.Now()})
 
 	rows := [][]telegram.Button{
 		{{Text: "Подтвердить", Data: "go:" + token}},
-		{{Text: "Назад", Data: "t:" + title.Slug}},
+		{{Text: "Назад", Data: "t:" + src.Name() + ":" + title.Slug}},
 	}
 	if _, err := b.api.SendMessageWithKeyboard(ctx, chatID, out.String(), rows); err != nil {
 		logx.Errorf("telegram: %v", err)
@@ -641,12 +689,16 @@ func (b *Bot) startPending(ctx context.Context, chatID int64, token string) {
 		b.reply(ctx, chatID, "подтверждение устарело, начни заново")
 		return
 	}
-	// The confirmation already decided which volumes to build, so the job carries the exact list.
-	b.enqueue(ctx, chatID, item.slug, strings.Join(item.volumes, ","), false)
+	// The confirmation already decided what to build, so the job carries the exact list.
+	if len(item.chapters) > 0 {
+		b.enqueueChapters(ctx, chatID, item.source, item.slug, item.chapters)
+		return
+	}
+	b.enqueue(ctx, chatID, item.source, item.slug, strings.Join(item.volumes, ","), false)
 }
 
 // enqueue puts a build job on the queue and reports it in the chat.
-func (b *Bot) enqueue(ctx context.Context, chatID int64, slug, volumes string, all bool) {
+func (b *Bot) enqueue(ctx context.Context, chatID int64, sourceName, slug, volumes string, all bool) {
 	logx.Infof("в очередь: %s, тома %q, все %v", slug, volumes, all)
 	messageID, err := b.api.SendMessage(ctx, chatID, "ставлю в очередь: "+html.EscapeString(slug))
 	if err != nil {
@@ -654,7 +706,22 @@ func (b *Bot) enqueue(ctx context.Context, chatID int64, slug, volumes string, a
 		return
 	}
 	select {
-	case b.jobs <- job{chatID: chatID, messageID: messageID, slug: slug, volumes: volumes, all: all}:
+	case b.jobs <- job{chatID: chatID, messageID: messageID, source: sourceName, slug: slug, volumes: volumes, all: all}:
+	default:
+		_ = b.api.EditMessage(ctx, chatID, messageID, "очередь переполнена, попробуй позже")
+	}
+}
+
+// enqueueChapters puts a manga build on the queue.
+func (b *Bot) enqueueChapters(ctx context.Context, chatID int64, sourceName, slug string, chapters []string) {
+	logx.Infof("в очередь: %s, глав %d", slug, len(chapters))
+	messageID, err := b.api.SendMessage(ctx, chatID, "ставлю в очередь: "+html.EscapeString(slug))
+	if err != nil {
+		logx.Errorf("telegram: %v", err)
+		return
+	}
+	select {
+	case b.jobs <- job{chatID: chatID, messageID: messageID, source: sourceName, slug: slug, chapters: chapters}:
 	default:
 		_ = b.api.EditMessage(ctx, chatID, messageID, "очередь переполнена, попробуй позже")
 	}
@@ -665,21 +732,25 @@ func (b *Bot) subscribe(ctx context.Context, chatID int64, args []string, subscr
 		b.reply(ctx, chatID, "нужна ссылка или slug")
 		return
 	}
-	slug := parseSlug(args[0])
+	src, slug, err := b.registry.Resolve(args[0])
+	if err != nil {
+		b.reply(ctx, chatID, html.EscapeString(err.Error()))
+		return
+	}
 
-	title, err := b.src.Title(ctx, slug)
+	title, err := src.Title(ctx, slug)
 	if err != nil {
 		b.reply(ctx, chatID, "не нашёл: "+html.EscapeString(err.Error()))
 		return
 	}
-	chapters, err := b.src.Chapters(ctx, title.Slug)
+	chapters, err := src.Chapters(ctx, title.Slug)
 	if err != nil {
 		b.reply(ctx, chatID, "ошибка: "+html.EscapeString(err.Error()))
 		return
 	}
 	volumes := build.GroupVolumes(chapters)
 	id, err := b.st.UpsertTitle(ctx, store.Title{
-		Source:        b.src.Name(),
+		Source:        src.Name(),
 		Slug:          title.Slug,
 		Title:         title.Title,
 		Authors:       title.Authors,
@@ -687,6 +758,7 @@ func (b *Bot) subscribe(ctx context.Context, chatID int64, args []string, subscr
 		SourceURL:     title.SourceURL,
 		TotalChapters: len(chapters),
 		TotalVolumes:  len(volumes),
+		Kind:          string(src.Kind()),
 	})
 	if err != nil {
 		b.reply(ctx, chatID, "ошибка базы: "+html.EscapeString(err.Error()))
@@ -729,6 +801,16 @@ func (b *Bot) worker(ctx context.Context) {
 }
 
 func (b *Bot) runJob(ctx context.Context, task job) {
+	src, ok := b.registry.ByName(task.source)
+	if !ok {
+		_ = b.api.EditMessage(ctx, task.chatID, task.messageID, "источник не найден")
+		return
+	}
+	if src.Kind() == source.KindManga {
+		b.runMangaJob(ctx, task, src)
+		return
+	}
+
 	ctx, cancel := context.WithCancel(ctx)
 	b.mu.Lock()
 	b.cancel = cancel
@@ -745,13 +827,13 @@ func (b *Bot) runJob(ctx context.Context, task job) {
 	}
 
 	logx.Infof("задача: %s", task.slug)
-	title, err := b.src.Title(ctx, task.slug)
+	title, err := src.Title(ctx, task.slug)
 	if err != nil {
 		logx.Errorf("задача %s: %v", task.slug, err)
 		edit("не нашёл: " + html.EscapeString(err.Error()))
 		return
 	}
-	chapters, err := b.src.Chapters(ctx, title.Slug)
+	chapters, err := src.Chapters(ctx, title.Slug)
 	if err != nil {
 		edit("ошибка: " + html.EscapeString(err.Error()))
 		return
@@ -769,7 +851,7 @@ func (b *Bot) runJob(ctx context.Context, task job) {
 	}
 
 	titleID, err := b.st.UpsertTitle(ctx, store.Title{
-		Source:        b.src.Name(),
+		Source:        src.Name(),
 		Slug:          title.Slug,
 		Title:         title.Title,
 		Authors:       title.Authors,
@@ -777,15 +859,18 @@ func (b *Bot) runJob(ctx context.Context, task job) {
 		SourceURL:     title.SourceURL,
 		TotalChapters: len(chapters),
 		TotalVolumes:  len(volumes),
+		Kind:          string(source.KindNovel),
 	})
 	if err != nil {
 		edit("ошибка базы: " + html.EscapeString(err.Error()))
 		return
 	}
 
-	covers, err := b.src.VolumeCovers(ctx, title.Slug)
-	if err != nil {
-		covers = map[string]string{}
+	covers := map[string]string{}
+	if novel, ok := src.(source.NovelSource); ok {
+		if found, err := novel.VolumeCovers(ctx, title.Slug); err == nil {
+			covers = found
+		}
 	}
 
 	lastEdit := time.Now()
@@ -799,7 +884,7 @@ func (b *Bot) runJob(ctx context.Context, task job) {
 
 	logx.Infof("сборка «%s»: тома %s", title.Title, volumeLabels(selected))
 	results, err := pipeline.Run(ctx, pipeline.Options{
-		Source:        b.src,
+		Source:        src,
 		Store:         b.st,
 		Title:         title,
 		TitleID:       titleID,
@@ -814,8 +899,7 @@ func (b *Bot) runJob(ctx context.Context, task job) {
 	var out strings.Builder
 	fmt.Fprintf(&out, "<b>%s</b>\n", html.EscapeString(title.Title))
 	for _, result := range results {
-		fmt.Fprintf(&out, "%s: %d глав, %s\n", html.EscapeString(build.VolumeTitle(result.Volume.Label)),
-			len(result.Volume.Chapters), humanSize(result.Size))
+		fmt.Fprintf(&out, "%s: %d глав, %s\n", html.EscapeString(result.Label), result.Chapters, humanSize(result.Size))
 		if result.Imported {
 			out.WriteString("  импортирован в BookOrbit\n")
 		} else {
@@ -868,21 +952,6 @@ func selectVolumes(volumes []build.Volume, list string, all bool) ([]build.Volum
 		return nil, fmt.Errorf("тома %q нет, доступны: %s", list, strings.Join(available, ", "))
 	}
 	return out, nil
-}
-
-// parseSlug accepts a bare slug or any RanobeLib URL that contains one.
-func parseSlug(input string) string {
-	input = strings.TrimSpace(input)
-	if !strings.Contains(input, "/") {
-		return input
-	}
-	parts := strings.Split(strings.Trim(input, "/"), "/")
-	for i, part := range parts {
-		if part == "book" && i+1 < len(parts) {
-			return strings.Split(parts[i+1], "?")[0]
-		}
-	}
-	return strings.Split(parts[len(parts)-1], "?")[0]
 }
 
 func humanSize(bytes int) string {
