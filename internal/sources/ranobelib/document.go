@@ -234,8 +234,8 @@ func documentToHTML(document any, attachments []map[string]any, imageHref func(u
 }
 
 var (
-	imgTag      = regexp.MustCompile(`(?is)<img\b[^>]*>`)
-	imgSrc      = regexp.MustCompile(`(?is)\bsrc\s*=\s*["']([^"']+)["']`)
+	imgTag       = regexp.MustCompile(`(?is)<img\b[^>]*>`)
+	imgSrc       = regexp.MustCompile(`(?is)\bsrc\s*=\s*["']([^"']+)["']`)
 	dangerBlocks = []*regexp.Regexp{
 		regexp.MustCompile(`(?is)<script\b[^>]*>.*?</script>`),
 		regexp.MustCompile(`(?is)<style\b[^>]*>.*?</style>`),
@@ -243,8 +243,8 @@ var (
 		regexp.MustCompile(`(?is)<object\b[^>]*>.*?</object>`),
 		regexp.MustCompile(`(?is)<embed\b[^>]*>.*?</embed>`),
 	}
-	eventAttr   = regexp.MustCompile(`(?is)\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)`)
-	jsHref      = regexp.MustCompile(`(?is)href\s*=\s*["']\s*javascript:[^"']*["']`)
+	eventAttr = regexp.MustCompile(`(?is)\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)`)
+	jsHref    = regexp.MustCompile(`(?is)href\s*=\s*["']\s*javascript:[^"']*["']`)
 )
 
 // htmlImageSources lists the image URLs of an HTML fragment.

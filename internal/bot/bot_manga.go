@@ -285,4 +285,3 @@ func (b *Bot) runMangaJob(ctx context.Context, task job, src source.Source) {
 	}
 	edit(out.String())
 }
-
