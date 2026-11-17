@@ -8,6 +8,7 @@ package reconcile
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"time"
 
@@ -83,6 +84,18 @@ func Run(ctx context.Context, st *store.Store, dir string) (Report, error) {
 					logx.Infof("sync: %s %s — импортирован", title.Title, volume.Label)
 				}
 			default:
+				// A volume that is still in the dock was built but not imported yet: it is not
+				// missing, and marking it so would hide it from the list.
+				if volume.FilePath != "" {
+					if _, err := os.Stat(volume.FilePath); err == nil {
+						if volume.Status != store.StatusBuilt {
+							if err := st.SetVolumeStatus(ctx, title.ID, volume.Label, store.StatusBuilt); err != nil {
+								return report, err
+							}
+						}
+						continue
+					}
+				}
 				if volume.Status != store.StatusMissing {
 					if err := st.SetVolumeStatus(ctx, title.ID, volume.Label, store.StatusMissing); err != nil {
 						return report, err
