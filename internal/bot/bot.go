@@ -99,7 +99,7 @@ func (b *Bot) help() string {
 /unsubscribe &lt;ссылка&gt; - перестать следить
 /status - сводка
 /cancel - прервать текущую сборку
-/cookie - какие куки загружены
+/cookie - куки: состояние и кнопки, по какой ссылке их присылать
 /cookie_clear - стереть куки
 
 Тайтл выбираешь ты: сервису нужна ссылка на книгу, поиска он больше не делает.
@@ -151,7 +151,7 @@ func (b *Bot) Run(ctx context.Context) error {
 		{"unsubscribe", "перестать следить"},
 		{"status", "сводка"},
 		{"cancel", "прервать текущую сборку"},
-		{"cookie", "состояние куки"},
+		{"cookie", "куки: состояние и обновление"},
 		{"cookie_clear", "стереть куки"},
 		{"help", "справка"},
 	}); err != nil {
@@ -448,7 +448,10 @@ func (b *Bot) cookie(ctx context.Context, chatID int64, args []string) {
 			b.reply(ctx, chatID, html.EscapeString(err.Error()))
 			return
 		}
-		b.reply(ctx, chatID, b.cookieSummary(jar, "Куки по источникам:"))
+		if _, err := b.api.SendMessageWithKeyboard(ctx, chatID, b.cookieSummary(jar, "Куки по источникам:"),
+			b.cookieButtons()); err != nil {
+			logx.Errorf("telegram: %v", err)
+		}
 		return
 	}
 	token := strings.TrimSpace(args[0])
@@ -476,6 +479,32 @@ func (b *Bot) cookieStatus() string {
 		return "куки не читаются: " + html.EscapeString(err.Error())
 	}
 	return b.cookieSummary(jar, "Куки по источникам:") + "\n\nЧтобы обновить - отправь файл cookies.txt в чат."
+}
+
+// cookieButtons offers every way to send cookies: the whole export, or one site at a time. Telegram
+// has no file picker to open from a button, so a button answers with what exactly to send.
+func (b *Bot) cookieButtons() [][]telegram.Button {
+	rows := [][]telegram.Button{{{Text: "Все куки", Data: "ck:all"}}}
+	for _, src := range b.registry.All() {
+		rows = append(rows, []telegram.Button{{Text: b.registry.Label(src.Name()), Data: "ck:" + src.Name()}})
+	}
+	return rows
+}
+
+// cookieHelp answers a button with the file to send for it.
+func (b *Bot) cookieHelp(ctx context.Context, chatID int64, which string) {
+	if which == "all" {
+		b.reply(ctx, chatID, "Кидай сюда файл cookies.txt целиком. Вольётся в общий файл: домены, которые есть "+
+			"в новом экспорте, заменятся, остальные останутся.")
+		return
+	}
+	host := b.registry.Host(which)
+	if _, ok := b.registry.ByName(which); !ok || host == "" {
+		b.reply(ctx, chatID, "неизвестный источник")
+		return
+	}
+	b.reply(ctx, chatID, fmt.Sprintf("Кидай файл с куками для <b>%s</b> (%s). Остальные сайты не тронутся.",
+		html.EscapeString(b.registry.Label(which)), html.EscapeString(host)))
 }
 
 // clearCookies wipes the jar and leaves every source without cookies.
@@ -656,6 +685,10 @@ func (b *Bot) handleCallback(ctx context.Context, query *telegram.CallbackQuery)
 			if src, ok := b.registry.ByName(parts[1]); ok {
 				b.confirm(ctx, chatID, src, parts[2], nil, true)
 			}
+		}
+	case "ck":
+		if len(parts) == 2 {
+			b.cookieHelp(ctx, chatID, parts[1])
 		}
 	case "s":
 		if len(parts) == 3 {
