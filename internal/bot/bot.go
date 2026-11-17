@@ -272,10 +272,8 @@ func (b *Bot) list(ctx context.Context, chatID int64) {
 		if src, ok := b.registry.ByName(title.Source); ok {
 			if chapters, err := src.Chapters(ctx, title.Slug); err == nil {
 				siteChapters = len(chapters)
-				if src.Kind() == source.KindManga {
-					totalUnits = len(chapters)
-				} else {
-					groups := build.GroupVolumes(chapters)
+				{
+					groups, _ := build.PlanVolumes(src.Kind(), chapters)
 					totalUnits = len(groups)
 					variants = build.Variants(chapters)
 					// A volume adopted from the library has no chapter count; fill it in while
@@ -294,10 +292,9 @@ func (b *Bot) list(ctx context.Context, chatID int64) {
 			}
 		}
 
+		// Both kinds are delivered as volumes: a novel by its own volumes, a comic cut into
+		// tens. Counting chapters for comics made the list claim more volumes than exist.
 		unitName := "томов"
-		if title.Kind == string(source.KindManga) {
-			unitName = "глав"
-		}
 		chaptersLabel := fmt.Sprintf("%d/%d глав", serverChapters, siteChapters)
 		if variants > siteChapters {
 			chaptersLabel += fmt.Sprintf(" (%d с переводами)", variants)
@@ -614,7 +611,7 @@ func (b *Bot) showVolumes(ctx context.Context, chatID int64, src source.Source, 
 		SourceURL:     title.SourceURL,
 		TotalChapters: len(chapters),
 		TotalVolumes:  len(volumes),
-		Kind:          string(source.KindNovel),
+		Kind:          string(src.Kind()),
 	})
 	// Only volumes that are actually on disk get a tick: a volume marked missing was deleted from
 	// the library and can be built again.
@@ -629,6 +626,7 @@ func (b *Bot) showVolumes(ctx context.Context, chatID int64, src source.Source, 
 		}
 	}
 
+	logx.Infof("%s: %d глав, %d томов", title.Slug, len(chapters), len(volumes))
 	rows := volumeButtons(src.Name(), title.Slug, volumes, known)
 
 	text := fmt.Sprintf("<b>%s</b>\nтомов: %d, глав: %d\n\nвыбери том:", html.EscapeString(title.Title), len(volumes), len(chapters))
@@ -1028,7 +1026,7 @@ func (b *Bot) runJob(ctx context.Context, task job) {
 		SourceURL:     title.SourceURL,
 		TotalChapters: len(chapters),
 		TotalVolumes:  len(volumes),
-		Kind:          string(source.KindNovel),
+		Kind:          string(src.Kind()),
 	})
 	if err != nil {
 		edit("ошибка базы: " + html.EscapeString(err.Error()))
