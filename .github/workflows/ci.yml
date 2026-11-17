@@ -1,0 +1,171 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["[0-9]*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ${{ github.repository }}
+
+jobs:
+  # Syntax, formatting and the unit tests. Everything below depends on this job, so a red test
+  # never produces an image.
+  test:
+    name: tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l . | grep -v '^$' || true)
+          if [ -n "$unformatted" ]; then
+            echo "не отформатировано:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: vet
+        run: go vet ./...
+
+      - name: build
+        run: go build ./...
+
+      - name: test
+        run: go test -race -count=1 -v ./... | tee test.log
+
+      - name: test summary
+        if: always()
+        run: |
+          passed=$(grep -c '^--- PASS' test.log || true)
+          failed=$(grep -c '^--- FAIL' test.log || true)
+          {
+            echo "### Тесты"
+            echo ""
+            echo "- пройдено: $passed"
+            echo "- упало: $failed"
+          } >> "$GITHUB_STEP_SUMMARY"
+          test "$failed" = "0"
+
+  # The next patch version, computed from the tags that already exist: 0.1.0 -> 0.1.1.
+  # Only a push to main gets a new version; a tag push already carries one.
+  version:
+    name: next version
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.next.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: compute
+        id: next
+        run: |
+          latest=$(git tag -l | grep -E '^0\.1\.[0-9]+$' | sort -V | tail -1)
+          if [ -z "$latest" ]; then
+            version="0.1.1"
+          else
+            version="0.1.$(( ${latest##*.} + 1 ))"
+          fi
+          echo "версия: $version (предыдущая: ${latest:-нет})"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  image:
+    name: image
+    needs: [test, version]
+    if: |
+      always() &&
+      needs.test.result == 'success' &&
+      (needs.version.result == 'success' || needs.version.result == 'skipped') &&
+      github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=${{ needs.version.outputs.version }},enable=${{ needs.version.outputs.version != '' }}
+            type=ref,event=tag
+            type=sha,format=short
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: verify
+        run: |
+          echo "### Образ" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          for tag in $(echo "${{ steps.meta.outputs.tags }}" | tr ',' '\n'); do
+            echo "- \`$tag\`" >> "$GITHUB_STEP_SUMMARY"
+          done
+          docker buildx imagetools inspect "${{ env.REGISTRY }}/${{ env.IMAGE }}:latest"
+
+  # The tag points at the commit that was just built and published, so image and source agree.
+  tag:
+    name: tag
+    needs: [version, image]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.image.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: create tag
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          if git rev-parse "refs/tags/$VERSION" >/dev/null 2>&1; then
+            echo "тег $VERSION уже есть, пропускаю"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$VERSION" -m "yomibako $VERSION"
+          git push origin "$VERSION"
+          echo "### Тег" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`$VERSION\` на коммите \`${GITHUB_SHA::7}\`" >> "$GITHUB_STEP_SUMMARY"
