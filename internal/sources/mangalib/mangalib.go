@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 
+	"github.com/Mimic890/yomibako/internal/logx"
 	"github.com/Mimic890/yomibako/internal/source"
 	"github.com/Mimic890/yomibako/internal/sources/ranobelib"
 )
@@ -84,8 +86,9 @@ func (s *Source) FetchImage(ctx context.Context, url string) (source.Image, erro
 	return s.Client.FetchImage(ctx, url)
 }
 
-// Pages implements source.MangaSource. Pages are downloaded four at a time and kept in order; a
-// chapter with a missing page is rejected rather than written with a gap.
+// Pages implements source.MangaSource. Pages are downloaded four at a time and kept in order. A page
+// the image host keeps failing on is skipped with a warning: one broken file on the CDN should not
+// cost a whole volume, but a chapter that is mostly broken still fails.
 func (s *Source) Pages(ctx context.Context, slug string, chapter source.Chapter) ([]source.Image, error) {
 	refs, err := s.Client.ChapterPages(ctx, slug, chapter)
 	if err != nil {
@@ -101,7 +104,6 @@ func (s *Source) Pages(ctx context.Context, slug string, chapter source.Chapter)
 	if len(refs) == 0 {
 		return nil, fmt.Errorf("глава без страниц")
 	}
-
 	const workers = 4
 	type result struct {
 		index int
@@ -132,12 +134,24 @@ func (s *Source) Pages(ctx context.Context, slug string, chapter source.Chapter)
 		close(results)
 	}()
 
-	images := make([]source.Image, len(refs))
+	collected := make([]result, 0, len(refs))
 	for item := range results {
+		collected = append(collected, item)
+	}
+	sort.Slice(collected, func(i, j int) bool { return collected[i].index < collected[j].index })
+
+	images := make([]source.Image, 0, len(refs))
+	skipped := 0
+	for _, item := range collected {
 		if item.err != nil {
-			return nil, fmt.Errorf("страница %d: %w", item.index+1, item.err)
+			skipped++
+			logx.Warnf("%s: страница %d пропущена: %v", chapter.DisplayTitle, item.index+1, item.err)
+			continue
 		}
-		images[item.index] = item.image
+		images = append(images, item.image)
+	}
+	if skipped > 0 && len(images)*2 < len(refs) {
+		return nil, fmt.Errorf("%s: не скачалось %d страниц из %d", chapter.DisplayTitle, skipped, len(refs))
 	}
 	return images, nil
 }
