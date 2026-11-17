@@ -430,7 +430,7 @@ func (b *Bot) add(ctx context.Context, chatID int64, args []string) {
 		b.reply(ctx, chatID, html.EscapeString(err.Error()))
 		return
 	}
-	b.showUnits(ctx, chatID, src, slug, 1)
+	b.showUnits(ctx, chatID, src, slug)
 }
 
 // askSource turns a bare slug into a question: the same slug may exist on several sites, and only
@@ -450,12 +450,9 @@ func (b *Bot) askSource(ctx context.Context, chatID int64, slug string) {
 	}
 }
 
-// showUnits lists volumes of a novel or chapters of a manga.
-func (b *Bot) showUnits(ctx context.Context, chatID int64, src source.Source, slug string, page int) {
-	if src.Kind() == source.KindManga {
-		b.showChapters(ctx, chatID, src, slug, page)
-		return
-	}
+// showUnits lists the volumes of a title. Manga is built one CBZ per volume too: BookOrbit makes
+// one book out of one file, so a chapter-per-file run would land as a pile of separate titles.
+func (b *Bot) showUnits(ctx context.Context, chatID int64, src source.Source, slug string) {
 	b.showVolumes(ctx, chatID, src, slug)
 }
 
@@ -542,14 +539,7 @@ func (b *Bot) handleCallback(ctx context.Context, query *telegram.CallbackQuery)
 	case "t":
 		if len(parts) == 3 {
 			if src, ok := b.registry.ByName(parts[1]); ok {
-				b.showUnits(ctx, chatID, src, parts[2], 1)
-			}
-		}
-	case "p":
-		if len(parts) == 4 {
-			if src, ok := b.registry.ByName(parts[1]); ok {
-				page, _ := strconv.Atoi(parts[3])
-				b.showUnits(ctx, chatID, src, parts[2], page)
+				b.showUnits(ctx, chatID, src, parts[2])
 			}
 		}
 	case "v":
@@ -572,7 +562,7 @@ func (b *Bot) handleCallback(ctx context.Context, query *telegram.CallbackQuery)
 				return
 			}
 			if src, found := b.registry.ByName(parts[1]); found {
-				b.showUnits(ctx, chatID, src, slug, 1)
+				b.showUnits(ctx, chatID, src, slug)
 			}
 		}
 	case "go":
@@ -584,10 +574,6 @@ func (b *Bot) handleCallback(ctx context.Context, query *telegram.CallbackQuery)
 
 // confirm shows what is about to be downloaded and waits for a button press.
 func (b *Bot) confirm(ctx context.Context, chatID int64, src source.Source, slug string, units []string, all bool) {
-	if src.Kind() == source.KindManga {
-		b.confirmChapters(ctx, chatID, src, slug, units, all)
-		return
-	}
 	title, err := src.Title(ctx, slug)
 	if err != nil {
 		b.reply(ctx, chatID, "не нашёл: "+html.EscapeString(err.Error()))
@@ -857,10 +843,6 @@ func (b *Bot) runJob(ctx context.Context, task job) {
 		_ = b.api.EditMessage(ctx, task.chatID, task.messageID, "источник не найден")
 		return
 	}
-	if src.Kind() == source.KindManga {
-		b.runMangaJob(ctx, task, src)
-		return
-	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	b.mu.Lock()
@@ -918,8 +900,8 @@ func (b *Bot) runJob(ctx context.Context, task job) {
 	}
 
 	covers := map[string]string{}
-	if novel, ok := src.(source.NovelSource); ok {
-		if found, err := novel.VolumeCovers(ctx, title.Slug); err == nil {
+	if coversSource, ok := src.(source.CoverSource); ok {
+		if found, err := coversSource.VolumeCovers(ctx, title.Slug); err == nil {
 			covers = found
 		}
 	}

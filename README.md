@@ -10,7 +10,8 @@
 Тайтл выбирает пользователь: сервису нужна ссылка на книгу, поиска внутри он не делает.
 
 Ранобэ собирается **том целиком** в один EPUB: обложка тома, метаданные, оглавление, иллюстрации
-глав. Манга и манхва собираются **по главам** в CBZ со `ComicInfo.xml`. Готовое никогда не
+глав. Манга и манхва собираются **том целиком** в один CBZ: постер тома первой страницей, все
+главы тома подряд, `ComicInfo.xml` с серией и номером тома. Готовое никогда не
 перезаписывается - новый том или глава это новый файл, поэтому прогресс чтения и метаданные в
 библиотеке не ломаются.
 
@@ -93,9 +94,8 @@ yomibako add https://ranobelib.me/ru/book/20818--lord-of-the-mysteries --volume 
 # другой источник
 yomibako add https://ranobehub.org/ranobe/1034-bleach-cant-fear-your-own-world --volume 1
 
-# манга: одна глава - один CBZ
-yomibako add https://mangalib.me/ru/manga/4464--jujutsu-kaisen --chapter 1
-yomibako add https://mangalib.me/ru/manga/4464--jujutsu-kaisen --chapter 1-10
+# манга: один том - один CBZ
+yomibako add https://mangalib.me/ru/manga/4464--jujutsu-kaisen --volume 1
 
 # все тома
 yomibako add https://ranobelib.me/ru/book/20818--lord-of-the-mysteries --all

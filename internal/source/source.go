@@ -112,6 +112,11 @@ type NovelSource interface {
 	VolumeCovers(ctx context.Context, slug string) (map[string]string, error)
 }
 
+// CoverSource is a source that has a separate poster for every volume.
+type CoverSource interface {
+	VolumeCovers(ctx context.Context, slug string) (map[string]string, error)
+}
+
 // MangaSource is a source of image pages, built into one CBZ per chapter.
 type MangaSource interface {
 	Source

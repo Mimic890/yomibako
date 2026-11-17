@@ -23,8 +23,7 @@ type Options struct {
 	Store         *store.Store
 	Title         source.Title
 	TitleID       int64
-	Volumes       []build.Volume   // novels: volumes to build
-	Chapters      []source.Chapter // manga: chapters to build
+	Volumes       []build.Volume // volumes to build, both EPUB and CBZ
 	Covers        map[string]string
 	Dock          string
 	OutDir        string
@@ -138,23 +137,24 @@ func runManga(ctx context.Context, opts Options) ([]Result, error) {
 		progress = func(string, ...any) {}
 	}
 
-	results := make([]Result, 0, len(opts.Chapters))
-	for _, chapter := range opts.Chapters {
+	results := make([]Result, 0, len(opts.Volumes))
+	for _, volume := range opts.Volumes {
 		if err := ctx.Err(); err != nil {
 			return results, err
 		}
 		started := time.Now()
-		label := ChapterLabel(chapter)
-		logx.Infof("%s: сборка", label)
+		label := build.VolumeTitle(volume.Label)
+		logx.Infof("%s: сборка, глав %d", label, len(volume.Chapters))
 
-		path, err := targetPath(opts, DockFileName(opts.Title.Title, label)+".cbz", label, "book.cbz")
+		path, err := targetPath(opts, DockFileName(opts.Title.Title, label)+".cbz", VolumeDirName(volume), "book.cbz")
 		if err != nil {
 			return results, err
 		}
-		built, err := build.BuildChapter(ctx, build.ChapterOptions{
+		built, err := build.BuildComicVolume(ctx, build.VolumeOptions{
 			Source:   manga,
 			Title:    opts.Title,
-			Chapter:  chapter,
+			Volume:   volume,
+			CoverURL: opts.Covers[volume.Label],
 			Path:     path,
 			Progress: progress,
 		})
@@ -163,6 +163,9 @@ func runManga(ctx context.Context, opts Options) ([]Result, error) {
 		}
 
 		imported := false
+		if opts.Dock != "" && !opts.WaitForDock {
+			logx.Infof("%s: лежит в book-dock, ждёт подтверждения", label)
+		}
 		if opts.Dock != "" && opts.WaitForDock {
 			if err := WaitForDock(ctx, path); err != nil {
 				return results, err
@@ -172,19 +175,19 @@ func runManga(ctx context.Context, opts Options) ([]Result, error) {
 
 		if opts.Store != nil {
 			if err := record(ctx, opts.Store, opts.TitleID, store.Volume{
-				Label:    chapter.Number,
-				Number:   int(chapter.Index),
-				Chapters: 1,
+				Label:    volume.Label,
+				Number:   volume.Number,
+				Chapters: len(volume.Chapters),
 				Format:   "cbz",
 			}, path, int(built.Size), imported); err != nil {
 				return results, err
 			}
 		}
 
-		logx.Infof("%s: готово, %d страниц, %s", label, built.Pages, humanSize(int(built.Size)))
+		logx.Infof("%s: готово, глав %d, страниц %d, %s", label, built.Chapters, built.Pages, humanSize(int(built.Size)))
 		results = append(results, Result{
 			Label:    label,
-			Chapters: 1,
+			Chapters: built.Chapters,
 			Pages:    built.Pages,
 			Path:     path,
 			Size:     int(built.Size),

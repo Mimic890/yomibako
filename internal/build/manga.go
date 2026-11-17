@@ -9,50 +9,73 @@ import (
 	"github.com/Mimic890/yomibako/internal/source"
 )
 
-// ChapterOptions describes one manga chapter build.
-type ChapterOptions struct {
-	Source   source.MangaSource
-	Title    source.Title
-	Chapter  source.Chapter
+// VolumeOptions describes one manga volume build.
+type VolumeOptions struct {
+	Source source.MangaSource
+	Title  source.Title
+	Volume Volume
+	// CoverURL is the volume's own poster, if the source has one. It goes in as the first page so
+	// BookOrbit picks it up as the book cover.
+	CoverURL string
 	Path     string
 	Progress func(format string, args ...any)
 }
 
-// ChapterResult is a written CBZ.
-type ChapterResult struct {
+// VolumeResult is a written CBZ.
+type VolumeResult struct {
 	Path     string
 	Pages    int
+	Chapters int
 	Size     int64
-	Warnings []string
 }
 
-// BuildChapter downloads every page of a chapter and writes it as a CBZ.
-func BuildChapter(ctx context.Context, opts ChapterOptions) (ChapterResult, error) {
+// BuildComicVolume downloads every page of every chapter of a volume and writes one CBZ. BookOrbit makes
+// one book out of one file, so a volume has to be a single archive to be a single entry with its own
+// poster; chapters stay apart only inside the archive.
+func BuildComicVolume(ctx context.Context, opts VolumeOptions) (VolumeResult, error) {
 	progress := opts.Progress
 	if progress == nil {
 		progress = func(string, ...any) {}
 	}
+	if len(opts.Volume.Chapters) == 0 {
+		return VolumeResult{}, fmt.Errorf("%s: в томе нет глав", VolumeTitle(opts.Volume.Label))
+	}
 
-	progress("%s: страницы", opts.Chapter.DisplayTitle)
-	pages, err := opts.Source.Pages(ctx, opts.Title.Slug, opts.Chapter)
-	if err != nil {
-		return ChapterResult{}, err
+	// The cover is the first page: BookOrbit takes the first image of a CBZ as the book cover, and
+	// a volume poster in front of the pages reads naturally too.
+	pages := make([]source.Image, 0, 200)
+	if opts.CoverURL != "" {
+		if cover, err := opts.Source.FetchImage(ctx, opts.CoverURL); err == nil {
+			pages = append(pages, cover)
+		}
+	}
+
+	for _, chapter := range opts.Volume.Chapters {
+		if err := ctx.Err(); err != nil {
+			return VolumeResult{}, err
+		}
+		progress("%s: %s", VolumeTitle(opts.Volume.Label), chapter.DisplayTitle)
+		chapterPages, err := opts.Source.Pages(ctx, opts.Title.Slug, chapter)
+		if err != nil {
+			return VolumeResult{}, fmt.Errorf("%s: %w", chapter.DisplayTitle, err)
+		}
+		pages = append(pages, chapterPages...)
 	}
 	if len(pages) == 0 {
-		return ChapterResult{}, fmt.Errorf("%s: нет страниц", opts.Chapter.DisplayTitle)
+		return VolumeResult{}, fmt.Errorf("%s: нет страниц", VolumeTitle(opts.Volume.Label))
 	}
 
 	file, err := os.Create(opts.Path)
 	if err != nil {
-		return ChapterResult{}, err
+		return VolumeResult{}, err
 	}
 	defer file.Close()
 
 	meta := cbz.Meta{
-		Title:    opts.Chapter.DisplayTitle,
+		Title:    VolumeTitle(opts.Volume.Label),
 		Series:   opts.Title.Title,
-		Number:   chapterNumber(opts.Chapter),
-		Volume:   volumeNumber(opts.Chapter.Volume),
+		Number:   opts.Volume.Number,
+		Volume:   opts.Volume.Number,
 		Summary:  opts.Title.Description,
 		Writer:   opts.Title.Authors,
 		Genre:    opts.Title.Genres,
@@ -60,33 +83,20 @@ func BuildChapter(ctx context.Context, opts ChapterOptions) (ChapterResult, erro
 		Manga:    true,
 	}
 	if err := cbz.Write(file, pages, meta); err != nil {
-		return ChapterResult{}, err
+		return VolumeResult{}, err
 	}
 	if err := file.Close(); err != nil {
-		return ChapterResult{}, err
+		return VolumeResult{}, err
 	}
 
 	info, err := os.Stat(opts.Path)
 	if err != nil {
-		return ChapterResult{}, err
+		return VolumeResult{}, err
 	}
-	return ChapterResult{Path: opts.Path, Pages: len(pages), Size: info.Size()}, nil
-}
-
-func chapterNumber(chapter source.Chapter) int {
-	if n, ok := parseNumber(chapter.Number); ok {
-		return n
-	}
-	return int(chapter.Index)
-}
-
-func parseNumber(value string) (int, bool) {
-	if value == "" {
-		return 0, false
-	}
-	var n int
-	if _, err := fmt.Sscanf(value, "%d", &n); err != nil {
-		return 0, false
-	}
-	return n, true
+	return VolumeResult{
+		Path:     opts.Path,
+		Pages:    len(pages),
+		Chapters: len(opts.Volume.Chapters),
+		Size:     info.Size(),
+	}, nil
 }

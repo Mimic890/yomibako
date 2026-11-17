@@ -145,17 +145,38 @@ func (c *Client) do(ctx context.Context, rawURL string) (*http.Response, error) 
 	}
 
 	logx.Debugf("GET %s", rawURL)
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return nil, &Error{Op: "request", URL: rawURL, Err: err}
+	// A 502 or a dropped connection from the image host says nothing about the request itself, so
+	// it is retried instead of failing a volume that is already half built.
+	var lastErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		resp, err := c.HTTP.Do(req)
+		if err == nil && resp.StatusCode < 500 {
+			if resp.StatusCode != http.StatusOK {
+				logx.Debugf("GET %s: HTTP %d", rawURL, resp.StatusCode)
+				io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+				resp.Body.Close()
+				return nil, &Error{Op: "request", URL: rawURL, Status: resp.StatusCode}
+			}
+			return resp, nil
+		}
+		if err != nil {
+			lastErr = &Error{Op: "request", URL: rawURL, Err: err}
+		} else {
+			io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+			resp.Body.Close()
+			lastErr = &Error{Op: "request", URL: rawURL, Status: resp.StatusCode}
+		}
+		if attempt < 3 {
+			delay := time.Duration(attempt*3) * time.Second
+			logx.Warnf("GET %s: %v, повтор через %s", rawURL, lastErr, delay)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(delay):
+			}
+		}
 	}
-	if resp.StatusCode != http.StatusOK {
-		logx.Debugf("GET %s: HTTP %d", rawURL, resp.StatusCode)
-		io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
-		resp.Body.Close()
-		return nil, &Error{Op: "request", URL: rawURL, Status: resp.StatusCode}
-	}
-	return resp, nil
+	return nil, lastErr
 }
 
 // getJSON decodes a JSON response into out.

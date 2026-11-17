@@ -4,7 +4,10 @@ package mangalib
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/Mimic890/yomibako/internal/source"
@@ -39,6 +42,15 @@ func NewHentaiLib() *Source {
 	return &Source{Client: client, name: "hentailib"}
 }
 
+// VolumeCovers maps a volume label to its full-resolution cover, the same way RanobeLib does.
+func (s *Source) VolumeCovers(ctx context.Context, slug string) (map[string]string, error) {
+	entries, err := s.Client.Covers(ctx, slug)
+	if err != nil {
+		return nil, err
+	}
+	return ranobelib.CoverMap(entries), nil
+}
+
 // SetCookies replaces the Cookie header sent with every request.
 func (s *Source) SetCookies(value string) { s.Client.Cookies = value }
 
@@ -58,6 +70,7 @@ func (s *Source) Search(ctx context.Context, query string, page int) (source.Sea
 
 // Title implements source.Source.
 func (s *Source) Title(ctx context.Context, slug string) (source.Title, error) {
+	slug = ranobelib.NormalizeSlug(slug)
 	return s.Client.Title(ctx, slug)
 }
 
@@ -76,6 +89,13 @@ func (s *Source) FetchImage(ctx context.Context, url string) (source.Image, erro
 func (s *Source) Pages(ctx context.Context, slug string, chapter source.Chapter) ([]source.Image, error) {
 	refs, err := s.Client.ChapterPages(ctx, slug, chapter)
 	if err != nil {
+		// The cdnlibs API answers "not found" instead of "forbidden" for chapters it will not show
+		// without a session, which is the usual case for 18+ titles.
+		var apiErr *ranobelib.Error
+		if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
+			return nil, fmt.Errorf("глава %s: сайт не отдаёт страницы без входа - положи куки от %s в cookies.txt (%w)",
+				chapter.DisplayTitle, strings.TrimPrefix(s.Client.SiteBase, "https://"), err)
+		}
 		return nil, err
 	}
 	if len(refs) == 0 {

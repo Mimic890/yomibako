@@ -41,6 +41,7 @@ func (s *Source) Search(ctx context.Context, query string, page int) (source.Sea
 // the API, which keys titles by "<id>--<slug>"; when the direct lookup fails the slug is resolved
 // through search and the canonical one is returned in Title.Slug.
 func (s *Source) Title(ctx context.Context, slug string) (source.Title, error) {
+	slug = NormalizeSlug(slug)
 	title, err := s.Client.Title(ctx, slug)
 	if err == nil {
 		return title, nil

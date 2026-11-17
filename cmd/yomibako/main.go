@@ -31,7 +31,7 @@ const usage = `yomibako - загрузка тайтлов в EPUB и CBZ
 Использование:
   yomibako info <ссылка>
   yomibako volumes <ссылка>
-  yomibako add <ссылка> [--volume 1,2 | --chapter 1-10 | --all] [--out DIR] [--dock DIR] [--wait]
+  yomibako add <ссылка> [--volume 1,2 | --all] [--out DIR] [--dock DIR] [--wait]
   yomibako list
   yomibako subscribe <ссылка> [--interval 24]
   yomibako unsubscribe <ссылка>
@@ -262,7 +262,6 @@ func runAdd(args []string) error {
 	var c common
 	c.register(fs)
 	volumeList := fs.String("volume", "", "номера томов через запятую")
-	chapterList := fs.String("chapter", "", "номера глав через запятую или диапазон 1-10")
 	all := fs.Bool("all", false, "все тома или главы")
 	limit := fs.Int("limit", 0, "ограничить число глав в томе")
 	if err := fs.Parse(reorderArgs(args)); err != nil {
@@ -306,35 +305,6 @@ func runAdd(args []string) error {
 		return err
 	}
 
-	if src.Kind() == source.KindManga {
-		selected, err := selectChapters(chapters, *chapterList, *all)
-		if err != nil {
-			return err
-		}
-		dir := cfg.BookDock
-		if dir == "" {
-			dir = filepath.Join(cfg.OutputDir, pipeline.SafeName(title.Title))
-		}
-		fmt.Printf("%s\n%s\n\n", title.Title, dir)
-		results, err := pipeline.Run(ctx, pipeline.Options{
-			Source:   src,
-			Store:    st,
-			Title:    title,
-			TitleID:  titleID,
-			Chapters: selected,
-			Dock:     cfg.BookDock,
-			OutDir:   cfg.OutputDir,
-			Progress: func(format string, args ...any) {
-				fmt.Fprintf(os.Stderr, "  "+format+"\n", args...)
-			},
-		})
-		for _, result := range results {
-			fmt.Printf("%s: %d страниц, %s, %s\n", result.Label, result.Pages, humanSize(result.Size), result.Duration.Round(time.Second))
-			fmt.Println("  ->", result.Path)
-		}
-		return err
-	}
-
 	if err := build.RequireVolumes(volumes); err != nil {
 		return err
 	}
@@ -348,8 +318,8 @@ func runAdd(args []string) error {
 	}
 
 	covers := map[string]string{}
-	if novel, ok := src.(source.NovelSource); ok {
-		if found, err := novel.VolumeCovers(ctx, title.Slug); err == nil {
+	if coversSource, ok := src.(source.CoverSource); ok {
+		if found, err := coversSource.VolumeCovers(ctx, title.Slug); err == nil {
 			covers = found
 		} else {
 			fmt.Fprintln(os.Stderr, "предупреждение: обложки томов недоступны:", err)
@@ -402,48 +372,6 @@ func runAdd(args []string) error {
 		return err
 	}
 	return nil
-}
-
-// selectChapters parses "1,2,3", "1-10" or "all". Without a list the first chapter is built.
-func selectChapters(chapters []source.Chapter, list string, all bool) ([]source.Chapter, error) {
-	if all {
-		return chapters, nil
-	}
-	list = strings.TrimSpace(list)
-	if list == "" {
-		return chapters[:1], nil
-	}
-
-	wanted := make(map[string]bool)
-	for _, part := range strings.Split(list, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		if from, to, ok := strings.Cut(part, "-"); ok {
-			start, err1 := strconv.Atoi(strings.TrimSpace(from))
-			end, err2 := strconv.Atoi(strings.TrimSpace(to))
-			if err1 != nil || err2 != nil || end < start {
-				return nil, fmt.Errorf("не разобрал диапазон %q", part)
-			}
-			for n := start; n <= end; n++ {
-				wanted[strconv.Itoa(n)] = true
-			}
-			continue
-		}
-		wanted[part] = true
-	}
-
-	var out []source.Chapter
-	for _, chapter := range chapters {
-		if wanted[chapter.Number] {
-			out = append(out, chapter)
-		}
-	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("глав %q нет", list)
-	}
-	return out, nil
 }
 
 func selectVolumes(volumes []build.Volume, list string, all bool) ([]build.Volume, error) {
