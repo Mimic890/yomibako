@@ -2,6 +2,7 @@ package bot
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/Mimic890/yomibako/internal/build"
@@ -107,5 +108,23 @@ func TestVolumeButtons(t *testing.T) {
 	}
 	if rows[2][0].Data != "a:ranobelib:1--x" {
 		t.Errorf("unexpected all button: %+v", rows[2][0])
+	}
+}
+
+func TestHelpListsSources(t *testing.T) {
+	cfg := config.Default()
+	b := New(cfg, sources.New(cfg), nil)
+
+	text := b.help()
+	for _, want := range []string{"RanobeLib", "RanobeHub", "TL.Rulate", "MangaLib", "HentaiLib"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("помощь не упоминает %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "/search") {
+		t.Error("поиск больше не должен предлагаться в помощи")
+	}
+	if !strings.Contains(text, "Источники ранобэ") || !strings.Contains(text, "Источники манги и манхвы") {
+		t.Errorf("помощь не делит источники на ранобэ и мангу:\n%s", text)
 	}
 }
