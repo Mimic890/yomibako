@@ -137,3 +137,48 @@ func TestHelpListsSources(t *testing.T) {
 		t.Errorf("помощь не делит источники на ранобэ и мангу:\n%s", text)
 	}
 }
+
+func TestQueueText(t *testing.T) {
+	bot := &Bot{registry: nil, tasks: []*task{
+		{source: "mangalib", title: "Хоримия", status: "running", volDone: 3, volTotal: 17, chDone: 28, chTotal: 150},
+		{source: "mangalib", slug: "4464--jujutsu-kaisen", status: "queued"},
+		{source: "ranobelib", title: "Слизь", status: "done", volDone: 2, chDone: 40},
+	}}
+	text := bot.queueText()
+	for _, want := range []string{"Хоримия", "3/17 томов", "28/150 глав", "в очереди", "готово: 2 томов"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("queue text has no %q:\n%s", want, text)
+		}
+	}
+	if strings.Index(text, "Хоримия") > strings.Index(text, "Слизь") {
+		t.Errorf("sources are mixed up:\n%s", text)
+	}
+}
+
+func TestEmptyQueueText(t *testing.T) {
+	bot := &Bot{}
+	if got := bot.queueText(); got != "очередь пуста" {
+		t.Errorf("unexpected text: %q", got)
+	}
+}
+
+func TestSplitMessage(t *testing.T) {
+	short := "коротко"
+	if parts := splitMessage(short, 100); len(parts) != 1 || parts[0] != short {
+		t.Errorf("short text was cut: %v", parts)
+	}
+
+	long := strings.Repeat("строка\n", 1000)
+	parts := splitMessage(long, 4000)
+	if len(parts) < 2 {
+		t.Fatalf("long text was not split: %d parts", len(parts))
+	}
+	for _, part := range parts {
+		if len(part) > 4000 {
+			t.Errorf("part is %d bytes", len(part))
+		}
+	}
+	if joined := strings.Join(parts, ""); len(joined) < len(long)/2 {
+		t.Errorf("text was lost: %d of %d", len(joined), len(long))
+	}
+}

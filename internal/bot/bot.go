@@ -115,7 +115,7 @@ func (b *Bot) help() string {
 /check [ссылка] - новые тома и главы; без ссылки завершённые пропускаются
 /sync - сверить базу с библиотекой
 /list - что уже в базе
-/subscribe &lt;ссылка&gt; [часы] - следить за тайтлом
+/subscribe &lt;ссылка&gt; - следить за тайтлом (проверка по /check)
 /unsubscribe &lt;ссылка&gt; - перестать следить
 /queue - что качается и что в очереди
 /status - сводка
@@ -261,9 +261,33 @@ func (b *Bot) handle(ctx context.Context, message *telegram.Message) {
 }
 
 func (b *Bot) reply(ctx context.Context, chatID int64, text string) {
-	if _, err := b.api.SendMessage(ctx, chatID, text); err != nil {
-		logx.Errorf("telegram: %v", err)
+	// Telegram refuses anything over 4096 characters, and a long list of titles gets there, so
+	// the text is cut on line boundaries.
+	for _, part := range splitMessage(text, 4000) {
+		if _, err := b.api.SendMessage(ctx, chatID, part); err != nil {
+			logx.Errorf("telegram: %v", err)
+		}
 	}
+}
+
+// splitMessage cuts text into pieces no longer than limit, preferring line breaks.
+func splitMessage(text string, limit int) []string {
+	if len(text) <= limit {
+		return []string{text}
+	}
+	var parts []string
+	for len(text) > limit {
+		cut := strings.LastIndex(text[:limit], "\n")
+		if cut <= 0 {
+			cut = limit
+		}
+		parts = append(parts, text[:cut])
+		text = strings.TrimLeft(text[cut:], "\n")
+	}
+	if text != "" {
+		parts = append(parts, text)
+	}
+	return parts
 }
 
 // ── commands ───────────────────────────────────────────────────────────────────────────────────
@@ -1072,7 +1096,8 @@ func (b *Bot) subscribe(ctx context.Context, chatID int64, args []string, subscr
 		b.reply(ctx, chatID, "ошибка базы: "+html.EscapeString(err.Error()))
 		return
 	}
-	b.reply(ctx, chatID, fmt.Sprintf("слежу за «%s», проверка каждые %d ч", html.EscapeString(title.Title), hours))
+	// Nothing runs on a timer: the subscription only marks the title for /check.
+	b.reply(ctx, chatID, fmt.Sprintf("слежу за «%s» - новинки ищутся по /check", html.EscapeString(title.Title)))
 }
 
 // flowMessage sends a step of the /add dialogue and removes the previous step, so the chat does not
@@ -1105,6 +1130,17 @@ func (b *Bot) clearFlow(ctx context.Context, chatID int64) {
 	for _, id := range previous {
 		_ = b.api.DeleteMessage(ctx, chatID, id)
 	}
+}
+
+// sourceLabel names a source for the chat, falling back to its key.
+func (b *Bot) sourceLabel(name string) string {
+	if b.registry == nil {
+		return name
+	}
+	if label := b.registry.Label(name); label != "" {
+		return label
+	}
+	return name
 }
 
 // sweep forgets finished tasks after half an hour, so the queue stays short.
@@ -1146,7 +1182,7 @@ func (b *Bot) queueText() string {
 	var out strings.Builder
 	out.WriteString("<b>Статус загрузки:</b>\n")
 	for _, name := range order {
-		fmt.Fprintf(&out, "\n<b>%s:</b>\n", html.EscapeString(b.registry.Label(name)))
+		fmt.Fprintf(&out, "\n<b>%s:</b>\n", html.EscapeString(b.sourceLabel(name)))
 		for _, t := range bySource[name] {
 			title := t.title
 			if title == "" {
