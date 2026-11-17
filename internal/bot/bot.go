@@ -25,6 +25,7 @@ import (
 	"github.com/Mimic890/yomibako/internal/sources"
 	"github.com/Mimic890/yomibako/internal/store"
 	"github.com/Mimic890/yomibako/internal/telegram"
+	"github.com/Mimic890/yomibako/internal/version"
 )
 
 // Bot serves one chat.
@@ -98,7 +99,7 @@ func (b *Bot) help() string {
 /unsubscribe &lt;ссылка&gt; - перестать следить
 /status - сводка
 /cancel - прервать текущую сборку
-/token &lt;токен&gt; - обновить токен RanobeLib
+/cookie - какие куки загружены и как их обновить
 
 Тайтл выбираешь ты: сервису нужна ссылка на книгу, поиска он больше не делает.
 
@@ -134,7 +135,7 @@ func (b *Bot) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("telegram: токен не принят: %w", err)
 	}
-	logx.Infof("бот @%s запущен, чат %d", me.Username, b.allowed)
+	logx.Infof("бот @%s запущен, версия %s, чат %d", me.Username, version.Version, b.allowed)
 	// A restart kills a running build, so say so instead of leaving the chat silent.
 	if _, err := b.api.SendMessage(ctx, b.allowed, "бот перезапущен"); err != nil {
 		logx.Warnf("не удалось сообщить о запуске: %v", err)
@@ -149,7 +150,7 @@ func (b *Bot) Run(ctx context.Context) error {
 		{"unsubscribe", "перестать следить"},
 		{"status", "сводка"},
 		{"cancel", "прервать текущую сборку"},
-		{"token", "обновить токен RanobeLib"},
+		{"cookie", "состояние куки и как их обновить"},
 		{"help", "справка"},
 	})
 
@@ -218,8 +219,8 @@ func (b *Bot) handle(ctx context.Context, message *telegram.Message) {
 		b.sync(ctx, message.Chat.ID)
 	case "cancel":
 		b.cancelJob(ctx, message.Chat.ID)
-	case "token":
-		b.setToken(ctx, message.Chat.ID, args)
+	case "cookie":
+		b.cookie(ctx, message.Chat.ID, args)
 	case "add":
 		b.add(ctx, message.Chat.ID, args)
 	case "subscribe":
@@ -330,6 +331,7 @@ func (b *Bot) status(ctx context.Context, chatID int64) {
 	if stats.Missing > 0 {
 		text += fmt.Sprintf("\nнет в библиотеке: %d", stats.Missing)
 	}
+	text += "\n\nверсия " + version.Version
 	b.reply(ctx, chatID, text)
 }
 
@@ -431,9 +433,11 @@ func (b *Bot) saveCookies(ctx context.Context, chatID int64, document *telegram.
 	b.reply(ctx, chatID, "куки обновлены: "+html.EscapeString(strings.Join(jar.Domains(), ", ")))
 }
 
-func (b *Bot) setToken(ctx context.Context, chatID int64, args []string) {
+// cookie reports which sites are authorised. Arguments are accepted as a RanobeLib token for the
+// case where cookies alone are not enough, but the normal way is a file drop.
+func (b *Bot) cookie(ctx context.Context, chatID int64, args []string) {
 	if len(args) == 0 {
-		b.reply(ctx, chatID, "нужен токен: /token &lt;токен&gt;")
+		b.reply(ctx, chatID, b.cookieStatus())
 		return
 	}
 	token := strings.TrimSpace(args[0])
@@ -448,6 +452,22 @@ func (b *Bot) setToken(ctx context.Context, chatID int64, args []string) {
 	b.registry.SetToken(token)
 	logx.Infof("токен обновлён")
 	b.reply(ctx, chatID, "токен обновлён")
+}
+
+// cookieStatus lists what is authorised right now.
+func (b *Bot) cookieStatus() string {
+	if b.cfg.Auth.CookiesFile == "" {
+		return "auth.cookies_file не задан в конфиге: куки складывать некуда"
+	}
+	jar, err := cookies.Load(b.cfg.Auth.CookiesFile)
+	if err != nil {
+		return "куки не читаются: " + html.EscapeString(err.Error())
+	}
+	var out strings.Builder
+	out.WriteString("Куки есть для: ")
+	out.WriteString(html.EscapeString(strings.Join(jar.Domains(), ", ")))
+	out.WriteString("\n\nЧтобы обновить - отправь файл cookies.txt в чат.")
+	return out.String()
 }
 
 func (b *Bot) add(ctx context.Context, chatID int64, args []string) {

@@ -188,7 +188,7 @@ func TestBotCancelWithoutJob(t *testing.T) {
 }
 
 func TestBotStoresToken(t *testing.T) {
-	fake := &fakeTelegram{updates: []string{"/token abcdefghijklmnopqrstuvwxyz"}}
+	fake := &fakeTelegram{updates: []string{"/cookie abcdefghijklmnopqrstuvwxyz"}}
 	server := httptest.NewServer(http.HandlerFunc(fake.handler))
 	defer server.Close()
 

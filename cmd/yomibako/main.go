@@ -24,6 +24,7 @@ import (
 	"github.com/Mimic890/yomibako/internal/sources"
 	"github.com/Mimic890/yomibako/internal/sources/ranobelib"
 	"github.com/Mimic890/yomibako/internal/store"
+	"github.com/Mimic890/yomibako/internal/version"
 )
 
 const usage = `yomibako - загрузка тайтлов в EPUB и CBZ
@@ -38,6 +39,7 @@ const usage = `yomibako - загрузка тайтлов в EPUB и CBZ
   yomibako check
   yomibako sync
   yomibako bot
+  yomibako version
 
 Флаги:
   -c, --config PATH   файл конфигурации (по умолчанию yomibako.yml)
@@ -66,6 +68,9 @@ func run(args []string) error {
 	switch command {
 	case "help", "-h", "--help":
 		fmt.Print(usage)
+		return nil
+	case "version", "-v", "--version":
+		fmt.Println(version.Version)
 		return nil
 	case "info":
 		return runInfo(rest)
