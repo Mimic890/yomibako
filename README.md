@@ -1,20 +1,23 @@
 # Yomibako
 
-Загрузка тайтлов с книжных сайтов в EPUB. Сейчас поддерживается RanobeLib, дальше добавляются
-другие источники.
+[![ci](https://github.com/Mimic890/yomibako/actions/workflows/ci.yml/badge.svg)](https://github.com/Mimic890/yomibako/actions/workflows/ci.yml)
 
-Сервис собирает **том целиком** в один EPUB: обложка тома, метаданные, оглавление, иллюстрации
-глав. Тома не перезаписываются - новый том это новый файл, поэтому прогресс чтения и метаданные
-в библиотеке не ломаются.
+Загрузка тайтлов с книжных сайтов в BookOrbit: RanobeLib для ранобэ, MangaLib и HentaiLib для
+манги и манхвы.
+
+Ранобэ собирается **том целиком** в один EPUB: обложка тома, метаданные, оглавление, иллюстрации
+глав. Манга и манхва собираются **по главам** в CBZ со `ComicInfo.xml`. Готовое никогда не
+перезаписывается - новый том или глава это новый файл, поэтому прогресс чтения и метаданные в
+библиотеке не ломаются.
 
 ## Docker Compose
+
+Готовый образ собирается на каждый коммит в `main`:
 
 ```yaml
 services:
   yomibako:
-    build:
-      context: /srv/dev/yomibako
-    image: yomibako:local
+    image: ghcr.io/mimic890/yomibako:latest
     container_name: yomibako
     restart: unless-stopped
     command: ["bot"]
@@ -27,6 +30,8 @@ services:
     environment:
       TZ: Europe/Moscow
 ```
+
+Вместо `latest` можно закрепить конкретную версию, например `ghcr.io/mimic890/yomibako:0.1.1`.
 
 Конфиг лежит в `./config/yomibako.yml`, база в `./data`, готовые тома уходят прямо в
 `book-dock` BookOrbit. Пути внутри контейнера:
@@ -41,9 +46,25 @@ output_dir: /data/out
 Запуск и обновление:
 
 ```bash
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 docker compose logs -f
 ```
+
+## Сборка и версии
+
+`main` защищён тестами: `gofmt`, `go vet` и `go test -race ./...` гоняются на каждый push, и только
+после них собирается образ. На каждый коммит в `main` выходит `latest` и новый тег `0.1.X` -
+патч-версия считается от предыдущего тега, тег ставится на тот же коммит, из которого собран образ.
+
+```yaml
+latest      -> последний коммит в main
+0.1.4       -> конкретная версия, ставится автоматически
+sha-1a2b3c4 -> коммит
+```
+
+`0.2.0` ставится вручную: `git tag -a 0.2.0 -m "yomibako 0.2.0" && git push origin 0.2.0`. На тег
+workflow соберёт образ с этим тегом и не будет придумывать новый патч.
 
 ## Установка
 
@@ -67,6 +88,10 @@ yomibako volumes lord-of-the-mysteries
 
 # собрать том 1 в ./out/<Название>/Том 01/book.epub
 yomibako add lord-of-the-mysteries --volume 1
+
+# манга: одна глава - один CBZ
+yomibako add https://mangalib.me/ru/manga/4464--jujutsu-kaisen --chapter 1
+yomibako add mangalib:4464--jujutsu-kaisen --chapter 1-10
 
 # все тома
 yomibako add lord-of-the-mysteries --all
