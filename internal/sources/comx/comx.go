@@ -45,6 +45,7 @@ type pageData struct {
 	Chapters []struct {
 		ID     int     `json:"id"`
 		Title  string  `json:"title"`
+		Volume float64 `json:"volume"`
 		Number float64 `json:"number"`
 		Date   string  `json:"date"`
 	} `json:"chapters"`
@@ -116,11 +117,25 @@ func (s *Source) Chapters(ctx context.Context, slug string) ([]source.Chapter, e
 	chapters := make([]source.Chapter, 0, len(data.Chapters))
 	for _, entry := range data.Chapters {
 		number := trimNumber(entry.Number)
+		// The page lists a volume for every chapter, so the comic is split by the site's own
+		// volumes instead of being cut into tens.
+		volume := ""
+		if entry.Volume > 0 {
+			volume = trimNumber(entry.Volume)
+		}
+		label := entry.Title
+		if volume != "" {
+			label = "Том " + volume + " Глава " + number
+			if entry.Title != "" && entry.Title != number {
+				label += " " + entry.Title
+			}
+		}
 		chapters = append(chapters, source.Chapter{
 			Index:        entry.Number,
+			Volume:       volume,
 			Number:       number,
 			Name:         entry.Title,
-			DisplayTitle: entry.Title,
+			DisplayTitle: label,
 			Ref:          strconv.Itoa(entry.ID),
 		})
 	}
