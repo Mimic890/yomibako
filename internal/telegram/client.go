@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -303,6 +304,36 @@ func (c *Client) SendDocument(ctx context.Context, chatID int64, name string, bo
 		return err
 	}
 	request.Header.Set("Content-Type", writer.FormDataContentType())
+
+	response, err := c.HTTP.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+
+	var payload apiResponse
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		return err
+	}
+	if !payload.OK {
+		return fmt.Errorf("telegram: %s", payload.Description)
+	}
+	return nil
+}
+
+// DeleteMessage removes a message. Deleting one that is already gone is not an error worth
+// reporting, so the caller can ignore the result.
+func (c *Client) DeleteMessage(ctx context.Context, chatID, messageID int64) error {
+	values := url.Values{}
+	values.Set("chat_id", strconv.FormatInt(chatID, 10))
+	values.Set("message_id", strconv.FormatInt(messageID, 10))
+
+	endpoint := fmt.Sprintf("%s/bot%s/deleteMessage", c.Base, c.Token)
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(values.Encode()))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	response, err := c.HTTP.Do(request)
 	if err != nil {

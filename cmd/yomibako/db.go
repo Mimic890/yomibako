@@ -196,7 +196,7 @@ func runCheck(args []string) error {
 
 	reports, err := check.Run(ctx, st, func(title store.Title) (source.Source, bool) {
 		return registry.ByName(title.Source)
-	})
+	}, check.Options{SkipCompleted: true})
 	if err != nil {
 		return err
 	}

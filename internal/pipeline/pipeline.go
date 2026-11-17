@@ -30,6 +30,8 @@ type Options struct {
 	IncludeImages bool
 	WaitForDock   bool
 	Progress      func(format string, args ...any)
+	// OnVolume reports a finished file, so a queue can show how far a title has got.
+	OnVolume func(done, total int, result Result)
 }
 
 // Result is one written file.
@@ -123,6 +125,9 @@ func runNovel(ctx context.Context, opts Options) ([]Result, error) {
 			Warnings: built.Warnings,
 			Duration: time.Since(started),
 		})
+		if opts.OnVolume != nil {
+			opts.OnVolume(len(results), len(opts.Volumes), results[len(results)-1])
+		}
 	}
 	return results, nil
 }
@@ -194,6 +199,9 @@ func runManga(ctx context.Context, opts Options) ([]Result, error) {
 			Imported: imported,
 			Duration: time.Since(started),
 		})
+		if opts.OnVolume != nil {
+			opts.OnVolume(len(results), len(opts.Volumes), results[len(results)-1])
+		}
 	}
 	return results, nil
 }

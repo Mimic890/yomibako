@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,12 +36,14 @@ type Bot struct {
 	registry *sources.Registry
 	st       *store.Store
 	allowed  int64
-	jobs     chan job
 
 	mu      sync.Mutex
-	cancel  context.CancelFunc
+	cancels map[string]context.CancelFunc
 	pending map[string]pendingJob
 	picks   map[string]pick
+	tasks   []*task
+	busy    map[string]bool
+	flow    map[int64][]int64
 }
 
 // pick is a slug waiting for the user to say which site it belongs to.
@@ -60,7 +63,11 @@ type pendingJob struct {
 	created  time.Time
 }
 
-type job struct {
+// task is one build: it waits in the queue, then runs on its own source's worker. Titles of
+// different sources build in parallel, titles of one source go one after another, so no site is
+// hit by several downloads at once.
+type task struct {
+	id        string
 	chatID    int64
 	messageID int64
 	source    string
@@ -68,6 +75,17 @@ type job struct {
 	volumes   string
 	chapters  []string
 	all       bool
+
+	title    string
+	status   string
+	err      string
+	volDone  int
+	volTotal int
+	chDone   int
+	chTotal  int
+	created  time.Time
+	started  time.Time
+	ended    time.Time
 }
 
 // New builds a bot from the configuration.
@@ -78,9 +96,11 @@ func New(cfg config.Config, registry *sources.Registry, st *store.Store) *Bot {
 		registry: registry,
 		st:       st,
 		allowed:  cfg.Telegram.ChatID,
-		jobs:     make(chan job, 8),
 		pending:  make(map[string]pendingJob),
 		picks:    make(map[string]pick),
+		busy:     make(map[string]bool),
+		cancels:  make(map[string]context.CancelFunc),
+		flow:     make(map[int64][]int64),
 	}
 }
 
@@ -92,11 +112,12 @@ func (b *Bot) help() string {
 Источники манги и манхвы: %s
 
 /add &lt;ссылка&gt; - выбрать тома или главы и собрать
-/check - новые тома и новые главы
+/check [ссылка] - новые тома и главы; без ссылки завершённые пропускаются
 /sync - сверить базу с библиотекой
 /list - что уже в базе
 /subscribe &lt;ссылка&gt; [часы] - следить за тайтлом
 /unsubscribe &lt;ссылка&gt; - перестать следить
+/queue - что качается и что в очереди
 /status - сводка
 /cancel - прервать текущую сборку
 /cookie - куки: состояние и кнопки, по какой ссылке их присылать
@@ -149,6 +170,7 @@ func (b *Bot) Run(ctx context.Context) error {
 		{"sync", "сверить базу с библиотекой"},
 		{"subscribe", "следить за тайтлом"},
 		{"unsubscribe", "перестать следить"},
+		{"queue", "что качается и что в очереди"},
 		{"status", "сводка"},
 		{"cancel", "прервать текущую сборку"},
 		{"cookie", "куки: состояние и обновление"},
@@ -157,8 +179,6 @@ func (b *Bot) Run(ctx context.Context) error {
 	}); err != nil {
 		logx.Warnf("меню команд не обновилось: %v", err)
 	}
-
-	go b.worker(ctx)
 
 	var offset int64
 	for {
@@ -218,13 +238,15 @@ func (b *Bot) handle(ctx context.Context, message *telegram.Message) {
 	case "status":
 		b.status(ctx, message.Chat.ID)
 	case "check":
-		b.check(ctx, message.Chat.ID)
+		b.check(ctx, message.Chat.ID, args)
 	case "sync":
 		b.sync(ctx, message.Chat.ID)
 	case "cancel":
 		b.cancelJob(ctx, message.Chat.ID)
 	case "cookie":
 		b.cookie(ctx, message.Chat.ID, args)
+	case "queue":
+		b.reply(ctx, message.Chat.ID, b.queueText())
 	case "cookie_clear", "cookie-clear":
 		b.clearCookies(ctx, message.Chat.ID)
 	case "add":
@@ -256,6 +278,15 @@ func (b *Bot) list(ctx context.Context, chatID int64) {
 		b.reply(ctx, chatID, "в базе пока пусто")
 		return
 	}
+
+	// Finished titles come last: they will not get new chapters, so they need no attention.
+	sort.SliceStable(titles, func(i, j int) bool {
+		a, b2 := check.Completed(titles[i].Status), check.Completed(titles[j].Status)
+		if a != b2 {
+			return !a
+		}
+		return strings.ToLower(titles[i].Title) < strings.ToLower(titles[j].Title)
+	})
 
 	items := make([]map[string]any, 0, len(titles))
 	var fallback strings.Builder
@@ -338,22 +369,57 @@ func (b *Bot) status(ctx context.Context, chatID int64) {
 	b.reply(ctx, chatID, text)
 }
 
-func (b *Bot) check(ctx context.Context, chatID int64) {
-	reports, err := check.Run(ctx, b.st, func(title store.Title) (source.Source, bool) {
+// check looks for new volumes and chapters. Without an argument it walks the subscriptions and
+// leaves finished titles alone; with a link it checks exactly that title, finished or not.
+func (b *Bot) check(ctx context.Context, chatID int64, args []string) {
+	resolve := func(title store.Title) (source.Source, bool) {
 		return b.registry.ByName(title.Source)
-	})
-	if err != nil {
-		b.reply(ctx, chatID, "ошибка базы: "+html.EscapeString(err.Error()))
-		return
 	}
-	if len(reports) == 0 {
-		b.reply(ctx, chatID, "подписок нет")
-		return
+
+	var reports []check.TitleReport
+	if len(args) > 0 {
+		src, slug, err := b.registry.Resolve(args[0])
+		if err != nil {
+			b.reply(ctx, chatID, html.EscapeString(err.Error()))
+			return
+		}
+		info, err := src.Title(ctx, slug)
+		if err != nil {
+			b.reply(ctx, chatID, "не нашёл: "+html.EscapeString(err.Error()))
+			return
+		}
+		id, err := b.st.UpsertTitle(ctx, store.Title{
+			Source: src.Name(), Slug: info.Slug, Title: info.Title, Authors: info.Authors,
+			CoverURL: info.CoverURL, SourceURL: info.SourceURL, Status: info.Status,
+			Kind: string(src.Kind()),
+		})
+		if err != nil {
+			b.reply(ctx, chatID, "ошибка базы: "+html.EscapeString(err.Error()))
+			return
+		}
+		reports = append(reports, check.Check(ctx, b.st, resolve, store.Title{
+			ID: id, Source: src.Name(), Slug: info.Slug, Title: info.Title, Status: info.Status,
+		}))
+	} else {
+		var err error
+		reports, err = check.Run(ctx, b.st, resolve, check.Options{SkipCompleted: true})
+		if err != nil {
+			b.reply(ctx, chatID, "ошибка базы: "+html.EscapeString(err.Error()))
+			return
+		}
+		if len(reports) == 0 {
+			b.reply(ctx, chatID, "подписок нет")
+			return
+		}
 	}
 
 	var out strings.Builder
-	newUnits, updated := 0, 0
+	newUnits, updated, skipped := 0, 0, 0
 	for _, report := range reports {
+		if report.Skipped {
+			skipped++
+			continue
+		}
 		name := html.EscapeString(report.Title.Title)
 		if report.Err != nil {
 			fmt.Fprintf(&out, "%s: ошибка %s\n", name, html.EscapeString(report.Err.Error()))
@@ -372,6 +438,9 @@ func (b *Bot) check(ctx context.Context, chatID int64) {
 			updated++
 			fmt.Fprintf(&out, "  том %s: %d глав из %d\n", html.EscapeString(update.Label), update.Have, update.Site)
 		}
+	}
+	if skipped > 0 {
+		fmt.Fprintf(&out, "завершённых пропущено: %d (проверить: /check &lt;ссылка&gt;)\n", skipped)
 	}
 	if newUnits == 0 && updated == 0 {
 		out.WriteString("\nнового нет")
@@ -393,15 +462,20 @@ func (b *Bot) sync(ctx context.Context, chatID int64) {
 
 func (b *Bot) cancelJob(ctx context.Context, chatID int64) {
 	b.mu.Lock()
-	cancel := b.cancel
+	cancels := make([]context.CancelFunc, 0, len(b.cancels))
+	for _, cancel := range b.cancels {
+		cancels = append(cancels, cancel)
+	}
 	b.mu.Unlock()
-	if cancel == nil {
+	if len(cancels) == 0 {
 		b.reply(ctx, chatID, "нечего отменять")
 		return
 	}
-	cancel()
-	logx.Infof("отмена текущей сборки")
-	b.reply(ctx, chatID, "отменяю")
+	for _, cancel := range cancels {
+		cancel()
+	}
+	logx.Infof("отмена сборок: %d", len(cancels))
+	b.reply(ctx, chatID, fmt.Sprintf("отменяю: %d", len(cancels)))
 }
 
 // saveCookies stores an uploaded cookies.txt, merges it with what is already there and switches the
@@ -574,9 +648,7 @@ func (b *Bot) askSource(ctx context.Context, chatID int64, slug string) {
 		}})
 	}
 	text := fmt.Sprintf("С какого сайта взять «%s»?", html.EscapeString(slug))
-	if _, err := b.api.SendMessageWithKeyboard(ctx, chatID, text, rows); err != nil {
-		logx.Errorf("telegram: %v", err)
-	}
+	b.flowMessage(ctx, chatID, text, rows)
 }
 
 // showUnits lists the volumes of a title. Manga is built one CBZ per volume too: BookOrbit makes
@@ -612,6 +684,7 @@ func (b *Bot) showVolumes(ctx context.Context, chatID int64, src source.Source, 
 		TotalChapters: len(chapters),
 		TotalVolumes:  len(volumes),
 		Kind:          string(src.Kind()),
+		Status:        title.Status,
 	})
 	// Only volumes that are actually on disk get a tick: a volume marked missing was deleted from
 	// the library and can be built again.
@@ -630,9 +703,7 @@ func (b *Bot) showVolumes(ctx context.Context, chatID int64, src source.Source, 
 	rows := b.volumeButtons(src.Name(), title.Slug, volumes, known)
 
 	text := fmt.Sprintf("<b>%s</b>\nтомов: %d, глав: %d\n\nвыбери том:", html.EscapeString(title.Title), len(volumes), len(chapters))
-	if _, err := b.api.SendMessageWithKeyboard(ctx, chatID, text, rows); err != nil {
-		logx.Errorf("telegram: %v", err)
-	}
+	b.flowMessage(ctx, chatID, text, rows)
 }
 
 // volumeButtons lays out one button per volume, four per row, plus an "all" button.
@@ -806,9 +877,7 @@ func (b *Bot) confirm(ctx context.Context, chatID int64, src source.Source, slug
 		{{Text: "Подтвердить", Data: "go:" + token}},
 		{{Text: "Назад", Data: "t:" + src.Name() + ":" + back}},
 	}
-	if _, err := b.api.SendMessageWithKeyboard(ctx, chatID, out.String(), rows); err != nil {
-		logx.Errorf("telegram: %v", err)
-	}
+	b.flowMessage(ctx, chatID, out.String(), rows)
 }
 
 // randomToken returns a short unguessable token for a pending confirmation.
@@ -893,31 +962,55 @@ func (b *Bot) startPending(ctx context.Context, chatID int64, token string) {
 
 // enqueue puts a build job on the queue and reports it in the chat.
 func (b *Bot) enqueue(ctx context.Context, chatID int64, sourceName, slug, volumes string, all bool) {
-	logx.Infof("в очередь: %s, тома %q, все %v", slug, volumes, all)
-	messageID, err := b.api.SendMessage(ctx, chatID, "ставлю в очередь: "+html.EscapeString(slug))
-	if err != nil {
-		logx.Errorf("telegram: %v", err)
-		return
-	}
-	select {
-	case b.jobs <- job{chatID: chatID, messageID: messageID, source: sourceName, slug: slug, volumes: volumes, all: all}:
-	default:
-		_ = b.api.EditMessage(ctx, chatID, messageID, "очередь переполнена, попробуй позже")
-	}
+	b.addTask(ctx, chatID, &task{source: sourceName, slug: slug, volumes: volumes, all: all})
 }
 
 // enqueueChapters puts a manga build on the queue.
 func (b *Bot) enqueueChapters(ctx context.Context, chatID int64, sourceName, slug string, chapters []string) {
-	logx.Infof("в очередь: %s, глав %d", slug, len(chapters))
-	messageID, err := b.api.SendMessage(ctx, chatID, "ставлю в очередь: "+html.EscapeString(slug))
+	b.addTask(ctx, chatID, &task{source: sourceName, slug: slug, chapters: chapters})
+}
+
+func (b *Bot) addTask(ctx context.Context, chatID int64, t *task) {
+	t.id = randomToken()
+	t.chatID = chatID
+	t.created = time.Now()
+	t.status = "queued"
+
+	b.mu.Lock()
+	position := 1 + len(b.tasks)
+	b.tasks = append(b.tasks, t)
+	b.mu.Unlock()
+
+	b.clearFlow(ctx, chatID)
+	logx.Infof("в очередь: %s (%s), позиция %d", t.slug, t.source, position)
+	messageID, err := b.api.SendMessage(ctx, chatID, fmt.Sprintf("в очереди %d: %s", position,
+		html.EscapeString(t.slug)))
 	if err != nil {
 		logx.Errorf("telegram: %v", err)
 		return
 	}
-	select {
-	case b.jobs <- job{chatID: chatID, messageID: messageID, source: sourceName, slug: slug, chapters: chapters}:
-	default:
-		_ = b.api.EditMessage(ctx, chatID, messageID, "очередь переполнена, попробуй позже")
+	t.messageID = messageID
+
+	go b.dispatch(ctx)
+}
+
+// dispatch starts every queued task whose source is idle.
+func (b *Bot) dispatch(ctx context.Context) {
+	b.mu.Lock()
+	var start []*task
+	for _, t := range b.tasks {
+		if t.status != "queued" || b.busy[t.source] {
+			continue
+		}
+		b.busy[t.source] = true
+		t.status = "running"
+		t.started = time.Now()
+		start = append(start, t)
+	}
+	b.mu.Unlock()
+
+	for _, t := range start {
+		go b.runTask(ctx, t)
 	}
 }
 
@@ -953,6 +1046,7 @@ func (b *Bot) subscribe(ctx context.Context, chatID int64, args []string, subscr
 		TotalChapters: len(chapters),
 		TotalVolumes:  len(volumes),
 		Kind:          string(src.Kind()),
+		Status:        title.Status,
 	})
 	if err != nil {
 		b.reply(ctx, chatID, "ошибка базы: "+html.EscapeString(err.Error()))
@@ -981,20 +1075,103 @@ func (b *Bot) subscribe(ctx context.Context, chatID int64, args []string, subscr
 	b.reply(ctx, chatID, fmt.Sprintf("слежу за «%s», проверка каждые %d ч", html.EscapeString(title.Title), hours))
 }
 
-// ── worker ────────────────────────────────────────────────────────────────────────────────────
+// flowMessage sends a step of the /add dialogue and removes the previous step, so the chat does not
+// fill up with dead volume lists.
+func (b *Bot) flowMessage(ctx context.Context, chatID int64, text string, buttons [][]telegram.Button) {
+	b.mu.Lock()
+	previous := b.flow[chatID]
+	b.flow[chatID] = nil
+	b.mu.Unlock()
+	for _, id := range previous {
+		_ = b.api.DeleteMessage(ctx, chatID, id)
+	}
 
-func (b *Bot) worker(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case task := <-b.jobs:
-			b.runJob(ctx, task)
-		}
+	messageID, err := b.api.SendMessageWithKeyboard(ctx, chatID, text, buttons)
+	if err != nil {
+		logx.Errorf("telegram: %v", err)
+		return
+	}
+	b.mu.Lock()
+	b.flow[chatID] = append(b.flow[chatID], messageID)
+	b.mu.Unlock()
+}
+
+// clearFlow removes the dialogue messages, called when the build starts.
+func (b *Bot) clearFlow(ctx context.Context, chatID int64) {
+	b.mu.Lock()
+	previous := b.flow[chatID]
+	b.flow[chatID] = nil
+	b.mu.Unlock()
+	for _, id := range previous {
+		_ = b.api.DeleteMessage(ctx, chatID, id)
 	}
 }
 
-func (b *Bot) runJob(ctx context.Context, task job) {
+// sweep forgets finished tasks after half an hour, so the queue stays short.
+func (b *Bot) sweep() {
+	kept := b.tasks[:0]
+	for _, t := range b.tasks {
+		if t.status == "done" || t.status == "failed" {
+			if time.Since(t.ended) > 30*time.Minute {
+				continue
+			}
+		}
+		kept = append(kept, t)
+	}
+	b.tasks = kept
+}
+
+// queueText renders the queue grouped by source: what is downloading now and what waits.
+func (b *Bot) queueText() string {
+	b.mu.Lock()
+	tasks := make([]task, 0, len(b.tasks))
+	for _, t := range b.tasks {
+		tasks = append(tasks, *t)
+	}
+	b.mu.Unlock()
+
+	if len(tasks) == 0 {
+		return "очередь пуста"
+	}
+
+	bySource := make(map[string][]task)
+	var order []string
+	for _, t := range tasks {
+		if _, ok := bySource[t.source]; !ok {
+			order = append(order, t.source)
+		}
+		bySource[t.source] = append(bySource[t.source], t)
+	}
+
+	var out strings.Builder
+	out.WriteString("<b>Статус загрузки:</b>\n")
+	for _, name := range order {
+		fmt.Fprintf(&out, "\n<b>%s:</b>\n", html.EscapeString(b.registry.Label(name)))
+		for _, t := range bySource[name] {
+			title := t.title
+			if title == "" {
+				title = t.slug
+			}
+			fmt.Fprintf(&out, "- %s\n", html.EscapeString(title))
+			switch t.status {
+			case "queued":
+				out.WriteString("  в очереди\n")
+			case "running":
+				fmt.Fprintf(&out, "  %d/%d томов · %d/%d глав\n", t.volDone, t.volTotal, t.chDone, t.chTotal)
+			case "done":
+				fmt.Fprintf(&out, "  готово: %d томов · %d глав\n", t.volDone, t.chDone)
+			case "failed":
+				fmt.Fprintf(&out, "  ошибка: %s\n", html.EscapeString(t.err))
+			}
+		}
+	}
+	return out.String()
+}
+
+// ── queue ─────────────────────────────────────────────────────────────────────────────────────
+
+// runTask builds one title and reports on its own message.
+func (b *Bot) runTask(ctx context.Context, task *task) {
 	src, ok := b.registry.ByName(task.source)
 	if !ok {
 		_ = b.api.EditMessage(ctx, task.chatID, task.messageID, "источник не найден")
@@ -1003,13 +1180,20 @@ func (b *Bot) runJob(ctx context.Context, task job) {
 
 	ctx, cancel := context.WithCancel(ctx)
 	b.mu.Lock()
-	b.cancel = cancel
+	b.cancels[task.id] = cancel
 	b.mu.Unlock()
 	defer func() {
 		cancel()
 		b.mu.Lock()
-		b.cancel = nil
+		delete(b.cancels, task.id)
+		b.busy[task.source] = false
+		if task.ended.IsZero() {
+			task.ended = time.Now()
+			task.status = "failed"
+		}
+		b.sweep()
 		b.mu.Unlock()
+		go b.dispatch(ctx)
 	}()
 
 	edit := func(text string) {
@@ -1040,6 +1224,17 @@ func (b *Bot) runJob(ctx context.Context, task job) {
 		return
 	}
 
+	// The queue shows progress per title, so its counters start with the plan.
+	chaptersInPlan := 0
+	for _, volume := range selected {
+		chaptersInPlan += len(volume.Chapters)
+	}
+	b.mu.Lock()
+	task.title = title.Title
+	task.volTotal = len(selected)
+	task.chTotal = chaptersInPlan
+	b.mu.Unlock()
+
 	titleID, err := b.st.UpsertTitle(ctx, store.Title{
 		Source:        src.Name(),
 		Slug:          title.Slug,
@@ -1050,6 +1245,7 @@ func (b *Bot) runJob(ctx context.Context, task job) {
 		TotalChapters: len(chapters),
 		TotalVolumes:  len(volumes),
 		Kind:          string(src.Kind()),
+		Status:        title.Status,
 	})
 	if err != nil {
 		edit("ошибка базы: " + html.EscapeString(err.Error()))
@@ -1084,6 +1280,12 @@ func (b *Bot) runJob(ctx context.Context, task job) {
 		IncludeImages: b.cfg.ImagesEnabled(),
 		WaitForDock:   false,
 		Progress:      progress,
+		OnVolume: func(done, total int, result pipeline.Result) {
+			b.mu.Lock()
+			task.volDone = done
+			task.chDone += result.Chapters
+			b.mu.Unlock()
+		},
 	})
 
 	var out strings.Builder
@@ -1102,6 +1304,16 @@ func (b *Bot) runJob(ctx context.Context, task job) {
 	} else {
 		logx.Infof("сборка «%s»: готово, томов %d", title.Title, len(results))
 	}
+	b.mu.Lock()
+	task.ended = time.Now()
+	if err != nil {
+		task.status = "failed"
+		task.err = err.Error()
+	} else {
+		task.status = "done"
+		task.volDone = len(results)
+	}
+	b.mu.Unlock()
 	edit(out.String())
 }
 

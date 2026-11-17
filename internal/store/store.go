@@ -38,10 +38,12 @@ type Title struct {
 	TotalChapters int
 	TotalVolumes  int
 	Kind          string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	Volumes       []Volume
-	Subscription  *Subscription
+	// Status is the source's own state of the title: ongoing, completed or unknown.
+	Status       string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	Volumes      []Volume
+	Subscription *Subscription
 }
 
 // Volume is one downloaded volume of a title.
@@ -174,6 +176,7 @@ func (s *Store) migrate() error {
 	// duplicate-column error is expected and ignored.
 	for _, statement := range []string{
 		`ALTER TABLE titles ADD COLUMN kind TEXT NOT NULL DEFAULT 'novel'`,
+		`ALTER TABLE titles ADD COLUMN status TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE volumes ADD COLUMN format TEXT NOT NULL DEFAULT 'epub'`,
 	} {
 		if _, err := s.db.Exec(statement); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
@@ -213,8 +216,8 @@ func (s *Store) UpsertTitle(ctx context.Context, title Title) (int64, error) {
 	nowValue := now()
 
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO titles (source, slug, title, authors, cover_url, source_url, total_chapters, total_volumes, kind, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO titles (source, slug, title, authors, cover_url, source_url, total_chapters, total_volumes, kind, status, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (source, slug) DO UPDATE SET
 			title = excluded.title,
 			authors = excluded.authors,
@@ -223,9 +226,10 @@ func (s *Store) UpsertTitle(ctx context.Context, title Title) (int64, error) {
 			total_chapters = excluded.total_chapters,
 			total_volumes = excluded.total_volumes,
 			kind = excluded.kind,
+			status = excluded.status,
 			updated_at = excluded.updated_at`,
 		title.Source, title.Slug, title.Title, string(authors), title.CoverURL, title.SourceURL,
-		title.TotalChapters, title.TotalVolumes, kindOrDefault(title.Kind), nowValue, nowValue)
+		title.TotalChapters, title.TotalVolumes, kindOrDefault(title.Kind), title.Status, nowValue, nowValue)
 	if err != nil {
 		return 0, err
 	}
@@ -306,7 +310,7 @@ func (s *Store) VolumeLabels(ctx context.Context, titleID int64) (map[string]str
 // Titles returns every tracked title with its volumes and subscription.
 func (s *Store) Titles(ctx context.Context) ([]Title, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, source, slug, title, authors, cover_url, source_url, total_chapters, total_volumes, kind, created_at, updated_at
+		SELECT id, source, slug, title, authors, cover_url, source_url, total_chapters, total_volumes, kind, status, created_at, updated_at
 		FROM titles ORDER BY title COLLATE NOCASE`)
 	if err != nil {
 		return nil, err
@@ -322,7 +326,8 @@ func (s *Store) Titles(ctx context.Context) ([]Title, error) {
 			updated string
 		)
 		if err := rows.Scan(&title.ID, &title.Source, &title.Slug, &title.Title, &authors,
-			&title.CoverURL, &title.SourceURL, &title.TotalChapters, &title.TotalVolumes, &title.Kind, &created, &updated); err != nil {
+			&title.CoverURL, &title.SourceURL, &title.TotalChapters, &title.TotalVolumes, &title.Kind,
+			&title.Status, &created, &updated); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(authors), &title.Authors)
@@ -451,10 +456,11 @@ func (s *Store) FindTitle(ctx context.Context, source, slug string) (*Title, err
 		updated string
 	)
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, source, slug, title, authors, cover_url, source_url, total_chapters, total_volumes, kind, created_at, updated_at
+		SELECT id, source, slug, title, authors, cover_url, source_url, total_chapters, total_volumes, kind, status, created_at, updated_at
 		FROM titles WHERE source = ? AND slug = ?`, source, slug).
 		Scan(&title.ID, &title.Source, &title.Slug, &title.Title, &authors, &title.CoverURL,
-			&title.SourceURL, &title.TotalChapters, &title.TotalVolumes, &title.Kind, &created, &updated)
+			&title.SourceURL, &title.TotalChapters, &title.TotalVolumes, &title.Kind, &title.Status,
+			&created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -528,3 +534,10 @@ func formatOrDefault(format string) string {
 
 // ErrNotFound is returned when a title is missing.
 var ErrNotFound = fmt.Errorf("title not found")
+
+// SetTitleStatus stores the source's state of a title: ongoing, completed or whatever it calls it.
+func (s *Store) SetTitleStatus(ctx context.Context, titleID int64, status string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE titles SET status = ?, updated_at = ? WHERE id = ?`,
+		status, now(), titleID)
+	return err
+}
