@@ -182,3 +182,32 @@ func TestSplitMessage(t *testing.T) {
 		t.Errorf("text was lost: %d of %d", len(joined), len(long))
 	}
 }
+
+func TestNextTasks(t *testing.T) {
+	tasks := []*task{
+		{source: "mangalib", status: "queued"},
+		{source: "mangalib", status: "queued"},
+		{source: "ranobelib", status: "queued"},
+		{source: "comx", status: "done"},
+	}
+	busy := map[string]bool{}
+	start := nextTasks(tasks, busy)
+	if len(start) != 2 {
+		t.Fatalf("expected one task per source, got %d", len(start))
+	}
+	if start[0].source != "mangalib" || start[1].source != "ranobelib" {
+		t.Errorf("wrong tasks started: %s, %s", start[0].source, start[1].source)
+	}
+	if !busy["mangalib"] || !busy["ranobelib"] {
+		t.Errorf("sources are not marked busy: %v", busy)
+	}
+
+	// The second mangalib task waits until the first one is finished.
+	if again := nextTasks(tasks, busy); len(again) != 0 {
+		t.Errorf("a second task of a busy source started: %d", len(again))
+	}
+	busy["mangalib"] = false
+	if again := nextTasks(tasks, busy); len(again) != 1 || again[0].source != "mangalib" {
+		t.Errorf("the queued task did not start after the source went idle: %v", again)
+	}
+}

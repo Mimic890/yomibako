@@ -1001,6 +1001,14 @@ func (b *Bot) addTask(ctx context.Context, chatID int64, t *task) {
 	t.status = "queued"
 
 	b.mu.Lock()
+	for _, known := range b.tasks {
+		if known.source == t.source && known.slug == t.slug &&
+			(known.status == "queued" || known.status == "running") {
+			b.mu.Unlock()
+			b.reply(ctx, chatID, "такой тайтл уже в очереди")
+			return
+		}
+	}
 	position := 1 + len(b.tasks)
 	b.tasks = append(b.tasks, t)
 	b.mu.Unlock()
@@ -1021,21 +1029,30 @@ func (b *Bot) addTask(ctx context.Context, chatID int64, t *task) {
 // dispatch starts every queued task whose source is idle.
 func (b *Bot) dispatch(ctx context.Context) {
 	b.mu.Lock()
-	var start []*task
-	for _, t := range b.tasks {
-		if t.status != "queued" || b.busy[t.source] {
-			continue
-		}
-		b.busy[t.source] = true
+	start := nextTasks(b.tasks, b.busy)
+	for _, t := range start {
 		t.status = "running"
 		t.started = time.Now()
-		start = append(start, t)
 	}
 	b.mu.Unlock()
 
 	for _, t := range start {
 		go b.runTask(ctx, t)
 	}
+}
+
+// nextTasks picks the tasks that may start now: one per source, in queue order. Titles of one site
+// never run together, titles of different sites do.
+func nextTasks(tasks []*task, busy map[string]bool) []*task {
+	var start []*task
+	for _, t := range tasks {
+		if t.status != "queued" || busy[t.source] {
+			continue
+		}
+		busy[t.source] = true
+		start = append(start, t)
+	}
+	return start
 }
 
 func (b *Bot) subscribe(ctx context.Context, chatID int64, args []string, subscribe bool) {
