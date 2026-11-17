@@ -69,3 +69,47 @@ func TestMergeReplacesDomainWhole(t *testing.T) {
 		t.Errorf("an untouched domain was dropped:\n%s", body)
 	}
 }
+
+func TestLinesFor(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cookies.txt")
+	body := line(".ranobelib.me", "a", "1") + "\n" +
+		line("com-x.life", "guard", "x") + "\n" +
+		line(".com-x.life", "img", "y") + "\n" +
+		line(".other.site", "z", "3") + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	lines, err := LinesFor(path, "com-x.life")
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "guard") || !strings.Contains(joined, "img") {
+		t.Errorf("com-x cookies missing:\n%s", joined)
+	}
+	if strings.Contains(joined, "other.site") || strings.Contains(joined, "ranobelib") {
+		t.Errorf("lines of another site leaked in:\n%s", joined)
+	}
+
+	if _, err := LinesFor(path, "absent.site"); err == nil {
+		t.Error("expected an error for a site with no cookies")
+	}
+}
+
+func TestClear(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cookies.txt")
+	if err := os.WriteFile(path, []byte(line(".ranobelib.me", "a", "1")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Clear(path); err != nil {
+		t.Fatal(err)
+	}
+	jar, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jar) != 0 {
+		t.Errorf("jar is not empty after Clear: %v", jar.Domains())
+	}
+}

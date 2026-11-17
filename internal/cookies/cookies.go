@@ -22,7 +22,12 @@ func Load(path string) (Jar, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cookies: %w", err)
 	}
-	return Parse(body)
+	jar, err := Parse(body)
+	if err != nil {
+		// An emptied file is a valid state, not a broken one.
+		return Jar{}, nil
+	}
+	return jar, nil
 }
 
 // Parse builds a jar out of a cookies.txt body.
@@ -188,4 +193,43 @@ func (j Jar) Domains() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// LinesFor returns the raw cookies.txt lines that belong to a host: its own domain and the parent
+// domain cookies a browser writes with a leading dot. Raw lines are kept so the export stays valid
+// when it is downloaded, edited and sent back.
+func LinesFor(path, host string) ([]string, error) {
+	host = strings.ToLower(strings.TrimSpace(host))
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("cookies: %w", err)
+	}
+
+	parents := map[string]bool{host: true}
+	parts := strings.Split(host, ".")
+	for i := 1; i < len(parts)-1; i++ {
+		parents[strings.Join(parts[i:], ".")] = true
+	}
+
+	header := []string{"# Netscape HTTP Cookie File", ""}
+	var lines []string
+	for _, line := range strings.Split(string(body), "\n") {
+		domain := lineDomain(line)
+		if domain == "" || !parents[domain] {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	if len(lines) == 0 {
+		return nil, fmt.Errorf("cookies: для %s куки не найдены", host)
+	}
+	return append(header, lines...), nil
+}
+
+// Clear empties the jar file, keeping the header so the next merge still works.
+func Clear(path string) error {
+	if err := os.WriteFile(path, []byte("# Netscape HTTP Cookie File\n"), 0o600); err != nil {
+		return fmt.Errorf("cookies: не смог очистить %s: %w", path, err)
+	}
+	return nil
 }

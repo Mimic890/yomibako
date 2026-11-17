@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -262,4 +263,49 @@ func (c *Client) SetMyCommands(ctx context.Context, commands [][2]string) error 
 	params := url.Values{}
 	params.Set("commands", string(payload))
 	return c.call(ctx, "setMyCommands", params, nil)
+}
+
+// SendDocument uploads a file to a chat. The Bot API wants multipart here, not the urlencoded form
+// the other methods use.
+func (c *Client) SendDocument(ctx context.Context, chatID int64, name string, body []byte, caption string) error {
+	var buffer bytes.Buffer
+	writer := multipart.NewWriter(&buffer)
+
+	_ = writer.WriteField("chat_id", strconv.FormatInt(chatID, 10))
+	if caption != "" {
+		_ = writer.WriteField("caption", caption)
+		_ = writer.WriteField("parse_mode", "HTML")
+	}
+	part, err := writer.CreateFormFile("document", name)
+	if err != nil {
+		return err
+	}
+	if _, err := part.Write(body); err != nil {
+		return err
+	}
+	if err := writer.Close(); err != nil {
+		return err
+	}
+
+	endpoint := fmt.Sprintf("%s/bot%s/sendDocument", c.Base, c.Token)
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, &buffer)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+
+	response, err := c.HTTP.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+
+	var payload apiResponse
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		return err
+	}
+	if !payload.OK {
+		return fmt.Errorf("telegram: %s", payload.Description)
+	}
+	return nil
 }
