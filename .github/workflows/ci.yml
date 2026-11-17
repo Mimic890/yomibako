@@ -133,13 +133,17 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: verify
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           echo "### Образ" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          for tag in $(echo "${{ steps.meta.outputs.tags }}" | tr ',' '\n'); do
+          while read -r tag; do
+            [ -n "$tag" ] || continue
             echo "- \`$tag\`" >> "$GITHUB_STEP_SUMMARY"
-          done
-          docker buildx imagetools inspect "${{ env.REGISTRY }}/${{ env.IMAGE }}:latest"
+          done <<< "$TAGS"
+          primary=$(echo "$TAGS" | head -1)
+          docker buildx imagetools inspect "$primary"
 
   # The tag points at the commit that was just built and published, so image and source agree.
   tag:
