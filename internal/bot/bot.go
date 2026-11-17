@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"html"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -100,8 +99,8 @@ func (b *Bot) help() string {
 /unsubscribe &lt;ссылка&gt; - перестать следить
 /status - сводка
 /cancel - прервать текущую сборку
-/cookie - куки: состояние и выгрузка файлов
-/cookie-clear - стереть куки
+/cookie - какие куки загружены
+/cookie_clear - стереть куки
 
 Тайтл выбираешь ты: сервису нужна ссылка на книгу, поиска он больше не делает.
 
@@ -143,7 +142,7 @@ func (b *Bot) Run(ctx context.Context) error {
 		logx.Warnf("не удалось сообщить о запуске: %v", err)
 	}
 
-	_ = b.api.SetMyCommands(ctx, [][2]string{
+	if err := b.api.SetMyCommands(ctx, [][2]string{
 		{"list", "что уже в базе"},
 		{"add", "собрать том или главу и отдать в BookOrbit"},
 		{"check", "новые тома и главы"},
@@ -152,10 +151,12 @@ func (b *Bot) Run(ctx context.Context) error {
 		{"unsubscribe", "перестать следить"},
 		{"status", "сводка"},
 		{"cancel", "прервать текущую сборку"},
-		{"cookie", "куки: состояние и файлы"},
-		{"cookie-clear", "стереть куки"},
+		{"cookie", "состояние куки"},
+		{"cookie_clear", "стереть куки"},
 		{"help", "справка"},
-	})
+	}); err != nil {
+		logx.Warnf("меню команд не обновилось: %v", err)
+	}
 
 	go b.worker(ctx)
 
@@ -224,7 +225,7 @@ func (b *Bot) handle(ctx context.Context, message *telegram.Message) {
 		b.cancelJob(ctx, message.Chat.ID)
 	case "cookie":
 		b.cookie(ctx, message.Chat.ID, args)
-	case "cookie-clear":
+	case "cookie_clear", "cookie-clear":
 		b.clearCookies(ctx, message.Chat.ID)
 	case "add":
 		b.add(ctx, message.Chat.ID, args)
@@ -447,10 +448,7 @@ func (b *Bot) cookie(ctx context.Context, chatID int64, args []string) {
 			b.reply(ctx, chatID, html.EscapeString(err.Error()))
 			return
 		}
-		if _, err := b.api.SendMessageWithKeyboard(ctx, chatID, b.cookieSummary(jar, "Куки по источникам:"),
-			b.cookieButtons()); err != nil {
-			logx.Errorf("telegram: %v", err)
-		}
+		b.reply(ctx, chatID, b.cookieSummary(jar, "Куки по источникам:"))
 		return
 	}
 	token := strings.TrimSpace(args[0])
@@ -478,51 +476,6 @@ func (b *Bot) cookieStatus() string {
 		return "куки не читаются: " + html.EscapeString(err.Error())
 	}
 	return b.cookieSummary(jar, "Куки по источникам:") + "\n\nЧтобы обновить - отправь файл cookies.txt в чат."
-}
-
-// cookieButtons offers the current cookies as a file: everything at once, or one site at a time.
-func (b *Bot) cookieButtons() [][]telegram.Button {
-	rows := [][]telegram.Button{{{Text: "Все куки", Data: "ck:all"}}}
-	for _, src := range b.registry.All() {
-		rows = append(rows, []telegram.Button{{Text: b.registry.Label(src.Name()), Data: "ck:" + src.Name()}})
-	}
-	return rows
-}
-
-// sendCookies uploads the jar for one source, or the whole file.
-func (b *Bot) sendCookies(ctx context.Context, chatID int64, which string) {
-	if b.cfg.Auth.CookiesFile == "" {
-		b.reply(ctx, chatID, "auth.cookies_file не задан в конфиге")
-		return
-	}
-
-	if which == "all" {
-		body, err := os.ReadFile(b.cfg.Auth.CookiesFile)
-		if err != nil {
-			b.reply(ctx, chatID, html.EscapeString(err.Error()))
-			return
-		}
-		if err := b.api.SendDocument(ctx, chatID, "cookies.txt", body, "все куки"); err != nil {
-			b.reply(ctx, chatID, "не смог отправить: "+html.EscapeString(err.Error()))
-		}
-		return
-	}
-
-	name := which
-	host := b.registry.Host(which)
-	if _, ok := b.registry.ByName(which); !ok || host == "" {
-		b.reply(ctx, chatID, "неизвестный источник")
-		return
-	}
-	lines, err := cookies.LinesFor(b.cfg.Auth.CookiesFile, host)
-	if err != nil {
-		b.reply(ctx, chatID, html.EscapeString(err.Error()))
-		return
-	}
-	body := []byte(strings.Join(lines, "\n") + "\n")
-	if err := b.api.SendDocument(ctx, chatID, name+".txt", body, b.registry.Label(name)+" ("+host+")"); err != nil {
-		b.reply(ctx, chatID, "не смог отправить: "+html.EscapeString(err.Error()))
-	}
 }
 
 // clearCookies wipes the jar and leaves every source without cookies.
@@ -703,10 +656,6 @@ func (b *Bot) handleCallback(ctx context.Context, query *telegram.CallbackQuery)
 			if src, ok := b.registry.ByName(parts[1]); ok {
 				b.confirm(ctx, chatID, src, parts[2], nil, true)
 			}
-		}
-	case "ck":
-		if len(parts) == 2 {
-			b.sendCookies(ctx, chatID, parts[1])
 		}
 	case "s":
 		if len(parts) == 3 {
