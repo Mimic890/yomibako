@@ -467,8 +467,8 @@ func (b *Bot) showVolumes(ctx context.Context, chatID int64, src source.Source, 
 		b.reply(ctx, chatID, "ошибка: "+html.EscapeString(err.Error()))
 		return
 	}
-	volumes := build.GroupVolumes(chapters)
-	if err := build.RequireVolumes(volumes); err != nil {
+	volumes, err := build.PlanVolumes(src.Kind(), chapters)
+	if err != nil {
 		b.reply(ctx, chatID, html.EscapeString(err.Error()))
 		return
 	}
@@ -584,8 +584,8 @@ func (b *Bot) confirm(ctx context.Context, chatID int64, src source.Source, slug
 		b.reply(ctx, chatID, "ошибка: "+html.EscapeString(err.Error()))
 		return
 	}
-	groups := build.GroupVolumes(chapters)
-	if err := build.RequireVolumes(groups); err != nil {
+	groups, err := build.PlanVolumes(src.Kind(), chapters)
+	if err != nil {
 		b.reply(ctx, chatID, html.EscapeString(err.Error()))
 		return
 	}
@@ -871,8 +871,8 @@ func (b *Bot) runJob(ctx context.Context, task job) {
 		edit("ошибка: " + html.EscapeString(err.Error()))
 		return
 	}
-	volumes := build.GroupVolumes(chapters)
-	if err := build.RequireVolumes(volumes); err != nil {
+	volumes, err := build.PlanVolumes(src.Kind(), chapters)
+	if err != nil {
 		edit(html.EscapeString(err.Error()))
 		return
 	}

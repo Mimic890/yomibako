@@ -70,6 +70,41 @@ func RequireVolumes(volumes []Volume) error {
 	return nil
 }
 
+// ChunkVolumes splits chapters into groups of size when a source keeps no volumes of its own, which
+// is the normal case for comics sites. Ten chapters is a rough manga volume.
+func ChunkVolumes(chapters []source.Chapter, size int) []Volume {
+	if size <= 0 {
+		size = 10
+	}
+	volumes := make([]Volume, 0, len(chapters)/size+1)
+	for start := 0; start < len(chapters); start += size {
+		end := start + size
+		if end > len(chapters) {
+			end = len(chapters)
+		}
+		number := len(volumes) + 1
+		volumes = append(volumes, Volume{
+			Label:    strconv.Itoa(number),
+			Number:   number,
+			Chapters: chapters[start:end],
+		})
+	}
+	return volumes
+}
+
+// PlanVolumes groups chapters into volumes, falling back to fixed-size chunks for a comic source
+// that has no volume data. Novels stay strict: an EPUB without volumes is refused, not guessed.
+func PlanVolumes(kind source.Kind, chapters []source.Chapter) ([]Volume, error) {
+	volumes := GroupVolumes(chapters)
+	if err := RequireVolumes(volumes); err == nil {
+		return volumes, nil
+	}
+	if kind != source.KindManga {
+		return nil, ErrNoVolumes
+	}
+	return ChunkVolumes(chapters, 10), nil
+}
+
 // Variants counts every translation variant of every chapter, which is the number a reader that
 // lists each variant shows.
 func Variants(chapters []source.Chapter) int {

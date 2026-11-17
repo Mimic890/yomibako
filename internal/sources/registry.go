@@ -11,6 +11,7 @@ import (
 	"github.com/Mimic890/yomibako/internal/config"
 	"github.com/Mimic890/yomibako/internal/cookies"
 	"github.com/Mimic890/yomibako/internal/source"
+	"github.com/Mimic890/yomibako/internal/sources/comx"
 	"github.com/Mimic890/yomibako/internal/sources/mangalib"
 	"github.com/Mimic890/yomibako/internal/sources/ranobehub"
 	"github.com/Mimic890/yomibako/internal/sources/ranobelib"
@@ -53,6 +54,10 @@ func New(cfg config.Config) *Registry {
 	manga := mangalib.New()
 	applyClient(manga.Client, cfg)
 	registry.add(manga, "MangaLib", "mangalib.me")
+
+	comxSource := comx.New()
+	applyWeb(&comxSource.Client.UserAgent, &comxSource.Client.Interval, cfg)
+	registry.add(comxSource, "Com-X", "com-x.life", "ru.com-x.life")
 
 	hentai := mangalib.NewHentaiLib()
 	applyClient(hentai.Client, cfg)

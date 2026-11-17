@@ -305,7 +305,8 @@ func runAdd(args []string) error {
 		return err
 	}
 
-	if err := build.RequireVolumes(volumes); err != nil {
+	volumes, err = build.PlanVolumes(src.Kind(), chapters)
+	if err != nil {
 		return err
 	}
 
