@@ -27,7 +27,10 @@ func Load(path string) (Jar, error) {
 
 // Parse builds a jar out of a cookies.txt body.
 func Parse(body []byte) (Jar, error) {
-	byDomain := make(map[string][]string)
+	// A name may appear twice for one host - once for "com-x.life" and once for ".com-x.life" - and
+	// sending both would confuse the site's session check, so the more specific domain wins.
+	byDomain := make(map[string]map[string]string)
+	exact := make(map[string]map[string]bool)
 	count := 0
 
 	scanner := bufio.NewScanner(bytes.NewReader(body))
@@ -46,13 +49,28 @@ func Parse(body []byte) (Jar, error) {
 		if len(fields) < 7 {
 			continue
 		}
-		domain := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(fields[0]), "."))
+		rawDomain := strings.ToLower(strings.TrimSpace(fields[0]))
+		domain := strings.TrimPrefix(rawDomain, ".")
 		name := strings.TrimSpace(fields[5])
 		value := fields[6]
 		if domain == "" || name == "" {
 			continue
 		}
-		byDomain[domain] = append(byDomain[domain], name+"="+value)
+		specific := !strings.HasPrefix(rawDomain, ".")
+
+		if byDomain[domain] == nil {
+			byDomain[domain] = make(map[string]string)
+			exact[domain] = make(map[string]bool)
+		}
+		if existing, taken := byDomain[domain][name]; taken && !specific && exact[domain][name] {
+			// A host-only cookie already holds this name; keep it.
+			if existing != "" {
+				count++
+				continue
+			}
+		}
+		byDomain[domain][name] = value
+		exact[domain][name] = specific
 		count++
 	}
 	if err := scanner.Err(); err != nil {
@@ -64,7 +82,16 @@ func Parse(body []byte) (Jar, error) {
 
 	jar := make(Jar, len(byDomain))
 	for domain, pairs := range byDomain {
-		jar[domain] = strings.Join(pairs, "; ")
+		names := make([]string, 0, len(pairs))
+		for name := range pairs {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		header := make([]string, 0, len(names))
+		for _, name := range names {
+			header = append(header, name+"="+pairs[name])
+		}
+		jar[domain] = strings.Join(header, "; ")
 	}
 	return jar, nil
 }

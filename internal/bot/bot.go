@@ -429,8 +429,8 @@ func (b *Bot) saveCookies(ctx context.Context, chatID int64, document *telegram.
 	}
 
 	b.registry.ReloadCookies(jar)
-	logx.Infof("куки обновлены из бота: %s", strings.Join(jar.Domains(), ", "))
-	b.reply(ctx, chatID, "куки обновлены: "+html.EscapeString(strings.Join(jar.Domains(), ", ")))
+	logx.Infof("куки обновлены из бота, доменов %d", len(jar))
+	b.reply(ctx, chatID, b.cookieSummary(jar, "Куки обновлены:"))
 }
 
 // cookie reports which sites are authorised. Arguments are accepted as a RanobeLib token for the
@@ -454,7 +454,8 @@ func (b *Bot) cookie(ctx context.Context, chatID int64, args []string) {
 	b.reply(ctx, chatID, "токен обновлён")
 }
 
-// cookieStatus lists what is authorised right now.
+// cookieStatus lists the sources and whether each has cookies. A full export holds hundreds of
+// domains and would not fit in a message.
 func (b *Bot) cookieStatus() string {
 	if b.cfg.Auth.CookiesFile == "" {
 		return "auth.cookies_file не задан в конфиге: куки складывать некуда"
@@ -463,10 +464,21 @@ func (b *Bot) cookieStatus() string {
 	if err != nil {
 		return "куки не читаются: " + html.EscapeString(err.Error())
 	}
+	return b.cookieSummary(jar, "Куки по источникам:") + "\n\nЧтобы обновить - отправь файл cookies.txt в чат."
+}
+
+// cookieSummary renders the per-source state of a jar.
+func (b *Bot) cookieSummary(jar cookies.Jar, header string) string {
 	var out strings.Builder
-	out.WriteString("Куки есть для: ")
-	out.WriteString(html.EscapeString(strings.Join(jar.Domains(), ", ")))
-	out.WriteString("\n\nЧтобы обновить - отправь файл cookies.txt в чат.")
+	out.WriteString(header)
+	for _, entry := range b.registry.CookieStatus(jar) {
+		mark := "✗"
+		if entry.Has {
+			mark = "✓"
+		}
+		fmt.Fprintf(&out, "\n%s %s (%s)", mark, html.EscapeString(entry.Label), html.EscapeString(entry.Host))
+	}
+	fmt.Fprintf(&out, "\n\nдоменов в файле: %d", len(jar))
 	return out.String()
 }
 

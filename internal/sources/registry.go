@@ -155,6 +155,29 @@ func (r *Registry) SetCookies(jar cookies.Jar) {
 	}
 }
 
+// CookieStatus says, for every source, whether the jar has cookies for its host. Only the sources
+// matter: a browser export carries hundreds of unrelated domains that must not reach the chat.
+func (r *Registry) CookieStatus(jar cookies.Jar) []struct {
+	Label string
+	Host  string
+	Has   bool
+} {
+	out := make([]struct {
+		Label string
+		Host  string
+		Has   bool
+	}, 0, len(r.order))
+	for _, name := range r.order {
+		host := r.host[name]
+		out = append(out, struct {
+			Label string
+			Host  string
+			Has   bool
+		}{Label: r.Label(name), Host: host, Has: jar.For(host) != ""})
+	}
+	return out
+}
+
 // ReloadCookies forgets every cookie and applies the jar again, which is what a fresh upload from
 // the bot needs: a domain that disappeared from the file must stop being sent.
 func (r *Registry) ReloadCookies(jar cookies.Jar) {

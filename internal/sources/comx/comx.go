@@ -55,7 +55,7 @@ type pageData struct {
 
 // Title implements source.Source.
 func (s *Source) Title(ctx context.Context, slug string) (source.Title, error) {
-	path := normalizeSlug(slug)
+	path := pagePath(slug)
 	body, err := s.Client.get(ctx, s.Client.Base+"/"+path)
 	if err != nil {
 		return source.Title{}, err
@@ -100,7 +100,7 @@ func (s *Source) Title(ctx context.Context, slug string) (source.Title, error) {
 
 // Chapters implements source.Source.
 func (s *Source) Chapters(ctx context.Context, slug string) ([]source.Chapter, error) {
-	path := normalizeSlug(slug)
+	path := pagePath(slug)
 	body, err := s.Client.get(ctx, s.Client.Base+"/"+path)
 	if err != nil {
 		return nil, err
@@ -129,7 +129,7 @@ func (s *Source) Chapters(ctx context.Context, slug string) ([]source.Chapter, e
 
 // Pages implements source.MangaSource: the reader page carries the image list for its chapter.
 func (s *Source) Pages(ctx context.Context, slug string, chapter source.Chapter) ([]source.Image, error) {
-	data, err := s.dataFor(ctx, normalizeSlug(slug))
+	data, err := s.dataFor(ctx, pagePath(slug))
 	if err != nil {
 		return nil, err
 	}
@@ -209,6 +209,16 @@ func normalizeSlug(slug string) string {
 		slug = slug[:index]
 	}
 	return strings.TrimSuffix(slug, ".html")
+}
+
+// pagePath rebuilds the document name: the site serves titles at "<id>-<slug>.html" and answers a
+// bare slug with its 404 page, which looks exactly like the JavaScript gate.
+func pagePath(slug string) string {
+	path := normalizeSlug(slug)
+	if !strings.HasSuffix(path, ".html") {
+		path += ".html"
+	}
+	return path
 }
 
 // extractData decodes window.__DATA__ out of a page.

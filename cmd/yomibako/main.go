@@ -160,7 +160,7 @@ func (c *common) load() (config.Config, *sources.Registry, error) {
 		if err != nil {
 			return cfg, nil, err
 		}
-		logx.Infof("куки прочитаны для: %s", strings.Join(jar.Domains(), ", "))
+		logx.Infof("куки прочитаны: %d доменов", len(jar))
 		registry.SetCookies(jar)
 	}
 	return cfg, registry, nil
@@ -250,7 +250,10 @@ func runVolumes(args []string) error {
 	if err != nil {
 		return err
 	}
-	volumes := build.GroupVolumes(chapters)
+	volumes, err := build.PlanVolumes(src.Kind(), chapters)
+	if err != nil {
+		return err
+	}
 	fmt.Printf("%s\nглав: %d, томов: %d\n\n", title.Title, len(chapters), len(volumes))
 	for _, volume := range volumes {
 		fmt.Printf("%-10s %3d глав  (%s ... %s)\n",
@@ -300,9 +303,9 @@ func runAdd(args []string) error {
 	if err != nil {
 		return err
 	}
-	volumes := build.GroupVolumes(chapters)
-	if len(volumes) == 0 {
-		return errors.New("у тайтла нет глав")
+	volumes, err := build.PlanVolumes(src.Kind(), chapters)
+	if err != nil {
+		return err
 	}
 
 	titleID, err := recordTitle(ctx, st, src, title, len(chapters), len(volumes))
