@@ -627,7 +627,7 @@ func (b *Bot) showVolumes(ctx context.Context, chatID int64, src source.Source, 
 	}
 
 	logx.Infof("%s: %d глав, %d томов", title.Slug, len(chapters), len(volumes))
-	rows := volumeButtons(src.Name(), title.Slug, volumes, known)
+	rows := b.volumeButtons(src.Name(), title.Slug, volumes, known)
 
 	text := fmt.Sprintf("<b>%s</b>\nтомов: %d, глав: %d\n\nвыбери том:", html.EscapeString(title.Title), len(volumes), len(chapters))
 	if _, err := b.api.SendMessageWithKeyboard(ctx, chatID, text, rows); err != nil {
@@ -636,7 +636,10 @@ func (b *Bot) showVolumes(ctx context.Context, chatID int64, src source.Source, 
 }
 
 // volumeButtons lays out one button per volume, four per row, plus an "all" button.
-func volumeButtons(sourceName, slug string, volumes []build.Volume, known map[string]string) [][]telegram.Button {
+func (b *Bot) volumeButtons(sourceName, slug string, volumes []build.Volume, known map[string]string) [][]telegram.Button {
+	// Telegram caps callback data at 64 bytes and a com-x slug alone can pass a hundred, so the
+	// buttons carry a short token instead of the slug.
+	token := b.rememberPick(slug)
 	var rows [][]telegram.Button
 	var row []telegram.Button
 	for _, volume := range volumes {
@@ -644,7 +647,7 @@ func volumeButtons(sourceName, slug string, volumes []build.Volume, known map[st
 		if _, ok := known[volume.Label]; ok {
 			label += " ✓"
 		}
-		row = append(row, telegram.Button{Text: label, Data: "v:" + sourceName + ":" + slug + ":" + volume.Label})
+		row = append(row, telegram.Button{Text: label, Data: "v:" + sourceName + ":" + token + ":" + volume.Label})
 		if len(row) == 4 {
 			rows = append(rows, row)
 			row = nil
@@ -653,7 +656,7 @@ func volumeButtons(sourceName, slug string, volumes []build.Volume, known map[st
 	if len(row) > 0 {
 		rows = append(rows, row)
 	}
-	return append(rows, []telegram.Button{{Text: "Все тома", Data: "a:" + sourceName + ":" + slug}})
+	return append(rows, []telegram.Button{{Text: "Все тома", Data: "a:" + sourceName + ":" + token}})
 }
 
 // handleCallback reacts to an inline button.
@@ -675,13 +678,17 @@ func (b *Bot) handleCallback(ctx context.Context, query *telegram.CallbackQuery)
 	case "v":
 		if len(parts) == 4 {
 			if src, ok := b.registry.ByName(parts[1]); ok {
-				b.confirm(ctx, chatID, src, parts[2], []string{parts[3]}, false)
+				if slug, ok := b.peekPick(parts[2]); ok {
+					b.confirm(ctx, chatID, src, slug, []string{parts[3]}, false)
+				}
 			}
 		}
 	case "a":
 		if len(parts) == 3 {
 			if src, ok := b.registry.ByName(parts[1]); ok {
-				b.confirm(ctx, chatID, src, parts[2], nil, true)
+				if slug, ok := b.peekPick(parts[2]); ok {
+					b.confirm(ctx, chatID, src, slug, nil, true)
+				}
 			}
 		}
 	case "ck":
@@ -836,6 +843,18 @@ func (b *Bot) rememberPick(slug string) string {
 	token := randomToken()
 	b.picks[token] = pick{slug: slug, created: time.Now()}
 	return token
+}
+
+// peekPick returns the slug behind a token without consuming it: the volume buttons of one title
+// are pressed more than once.
+func (b *Bot) peekPick(token string) (string, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	item, ok := b.picks[token]
+	if !ok || time.Since(item.created) > 10*time.Minute {
+		return "", false
+	}
+	return item.slug, true
 }
 
 // takePick returns the slug behind a token and forgets it.

@@ -92,7 +92,8 @@ func TestVolumeButtons(t *testing.T) {
 		{Label: "4", Number: 4},
 		{Label: "5", Number: 5},
 	}
-	rows := volumeButtons("ranobelib", "1--x", volumes, map[string]string{"2": "imported"})
+	bot := &Bot{picks: map[string]pick{}}
+	rows := bot.volumeButtons("ranobelib", "1--x", volumes, map[string]string{"2": "imported"})
 
 	if len(rows) != 3 {
 		t.Fatalf("expected 3 rows, got %d", len(rows))
@@ -103,10 +104,18 @@ func TestVolumeButtons(t *testing.T) {
 	if rows[0][1].Text != "Том 2 ✓" {
 		t.Errorf("built volume is not marked: %q", rows[0][1].Text)
 	}
-	if rows[0][0].Data != "v:ranobelib:1--x:1" {
+	// Telegram rejects callback data over 64 bytes, so the slug travels as a token.
+	if len(rows[0][0].Data) > 64 {
+		t.Errorf("callback data is too long: %q", rows[0][0].Data)
+	}
+	parts := strings.Split(rows[0][0].Data, ":")
+	if len(parts) != 4 || parts[0] != "v" || parts[1] != "ranobelib" || parts[3] != "1" {
 		t.Errorf("unexpected callback data: %q", rows[0][0].Data)
 	}
-	if rows[2][0].Data != "a:ranobelib:1--x" {
+	if slug, ok := bot.peekPick(parts[2]); !ok || slug != "1--x" {
+		t.Errorf("token does not lead back to the slug: %q", parts[2])
+	}
+	if rows[2][0].Data != "a:ranobelib:"+parts[2] {
 		t.Errorf("unexpected all button: %+v", rows[2][0])
 	}
 }
