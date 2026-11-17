@@ -179,6 +179,16 @@ func (c *Client) SendMessageWithKeyboard(ctx context.Context, chatID int64, text
 	params.Set("text", text)
 	params.Set("parse_mode", "HTML")
 	params.Set("disable_web_page_preview", "true")
+	// Telegram drops the whole message when one button carries more than 64 bytes, and its own
+	// error says nothing about which one, so the limit is checked here.
+	for _, row := range buttons {
+		for _, button := range row {
+			if len(button.Data) > 64 {
+				return 0, fmt.Errorf("telegram: callback data of %q is %d bytes, the limit is 64",
+					button.Text, len(button.Data))
+			}
+		}
+	}
 	if len(buttons) > 0 {
 		keyboard := make([][]map[string]string, 0, len(buttons))
 		for _, row := range buttons {

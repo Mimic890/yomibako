@@ -672,7 +672,9 @@ func (b *Bot) handleCallback(ctx context.Context, query *telegram.CallbackQuery)
 	case "t":
 		if len(parts) == 3 {
 			if src, ok := b.registry.ByName(parts[1]); ok {
-				b.showUnits(ctx, chatID, src, parts[2])
+				if slug, ok := b.peekPick(parts[2]); ok {
+					b.showUnits(ctx, chatID, src, slug)
+				}
 			}
 		}
 	case "v":
@@ -797,10 +799,12 @@ func (b *Bot) confirm(ctx context.Context, chatID int64, src source.Source, slug
 		labels = append(labels, group.Label)
 	}
 	token := b.remember(pendingJob{source: src.Name(), slug: title.Slug, volumes: labels, all: all, created: time.Now()})
+	// The back button cannot carry the slug: Telegram limits callback data to 64 bytes.
+	back := b.rememberPick(title.Slug)
 
 	rows := [][]telegram.Button{
 		{{Text: "Подтвердить", Data: "go:" + token}},
-		{{Text: "Назад", Data: "t:" + src.Name() + ":" + title.Slug}},
+		{{Text: "Назад", Data: "t:" + src.Name() + ":" + back}},
 	}
 	if _, err := b.api.SendMessageWithKeyboard(ctx, chatID, out.String(), rows); err != nil {
 		logx.Errorf("telegram: %v", err)
