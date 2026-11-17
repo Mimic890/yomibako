@@ -17,6 +17,7 @@ import (
 	"github.com/Mimic890/yomibako/internal/build"
 	"github.com/Mimic890/yomibako/internal/check"
 	"github.com/Mimic890/yomibako/internal/config"
+	"github.com/Mimic890/yomibako/internal/cookies"
 	"github.com/Mimic890/yomibako/internal/logx"
 	"github.com/Mimic890/yomibako/internal/pipeline"
 	"github.com/Mimic890/yomibako/internal/reconcile"
@@ -99,7 +100,9 @@ func (b *Bot) help() string {
 /cancel - прервать текущую сборку
 /token &lt;токен&gt; - обновить токен RanobeLib
 
-Тайтл выбираешь ты: сервису нужна ссылка на книгу, поиска он больше не делает.`,
+Тайтл выбираешь ты: сервису нужна ссылка на книгу, поиска он больше не делает.
+
+Куки: просто отправь сюда файл cookies.txt - он вольётся в общий и заработает сразу.`,
 		b.sourceList(source.KindNovel), b.sourceList(source.KindManga))
 }
 
@@ -183,6 +186,12 @@ func (b *Bot) handle(ctx context.Context, message *telegram.Message) {
 	if message.Chat.ID != b.allowed {
 		return
 	}
+	// A file drop is how cookies get refreshed: export from the browser, send here.
+	if message.Document != nil {
+		b.saveCookies(ctx, message.Chat.ID, message.Document)
+		return
+	}
+
 	text := strings.TrimSpace(message.Text)
 	if !strings.HasPrefix(text, "/") {
 		return
@@ -388,6 +397,38 @@ func (b *Bot) cancelJob(ctx context.Context, chatID int64) {
 	cancel()
 	logx.Infof("отмена текущей сборки")
 	b.reply(ctx, chatID, "отменяю")
+}
+
+// saveCookies stores an uploaded cookies.txt, merges it with what is already there and switches the
+// sources over to the new jar without a restart.
+func (b *Bot) saveCookies(ctx context.Context, chatID int64, document *telegram.Document) {
+	if b.cfg.Auth.CookiesFile == "" {
+		b.reply(ctx, chatID, "в конфиге не задан auth.cookies_file, сохранять некуда")
+		return
+	}
+	if document.FileSize > 2<<20 {
+		b.reply(ctx, chatID, "файл слишком большой для cookies.txt")
+		return
+	}
+	if name := strings.ToLower(document.FileName); name != "" && !strings.HasSuffix(name, ".txt") {
+		b.reply(ctx, chatID, "нужен файл cookies.txt в формате Netscape")
+		return
+	}
+
+	body, err := b.api.Download(ctx, document.FileID)
+	if err != nil {
+		b.reply(ctx, chatID, "не смог скачать файл: "+html.EscapeString(err.Error()))
+		return
+	}
+	jar, err := cookies.Merge(b.cfg.Auth.CookiesFile, body)
+	if err != nil {
+		b.reply(ctx, chatID, html.EscapeString(err.Error()))
+		return
+	}
+
+	b.registry.ReloadCookies(jar)
+	logx.Infof("куки обновлены из бота: %s", strings.Join(jar.Domains(), ", "))
+	b.reply(ctx, chatID, "куки обновлены: "+html.EscapeString(strings.Join(jar.Domains(), ", ")))
 }
 
 func (b *Bot) setToken(ctx context.Context, chatID int64, args []string) {

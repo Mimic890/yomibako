@@ -53,10 +53,19 @@ type Button struct {
 
 // Message is an incoming message.
 type Message struct {
-	MessageID int64  `json:"message_id"`
-	Text      string `json:"text"`
-	Chat      Chat   `json:"chat"`
-	From      *User  `json:"from"`
+	MessageID int64     `json:"message_id"`
+	Text      string    `json:"text"`
+	Chat      Chat      `json:"chat"`
+	From      *User     `json:"from"`
+	Document  *Document `json:"document"`
+}
+
+// Document is a file sent to the bot.
+type Document struct {
+	FileID   string `json:"file_id"`
+	FileName string `json:"file_name"`
+	MimeType string `json:"mime_type"`
+	FileSize int64  `json:"file_size"`
 }
 
 // Chat is a chat the bot talks to.
@@ -74,6 +83,35 @@ type apiResponse struct {
 	OK          bool            `json:"ok"`
 	Description string          `json:"description"`
 	Result      json.RawMessage `json:"result"`
+}
+
+// Download fetches a file the user sent, in full. The Bot API caps this at 20 MB, which a cookies
+// export never approaches.
+func (c *Client) Download(ctx context.Context, fileID string) ([]byte, error) {
+	var file struct {
+		FilePath string `json:"file_path"`
+	}
+	if err := c.call(ctx, "getFile", url.Values{"file_id": {fileID}}, &file); err != nil {
+		return nil, err
+	}
+	if file.FilePath == "" {
+		return nil, fmt.Errorf("telegram: файл недоступен")
+	}
+
+	endpoint := fmt.Sprintf("%s/file/bot%s/%s", c.Base, c.Token, file.FilePath)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	response, err := c.HTTP.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("telegram: файл не скачался: HTTP %d", response.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(response.Body, 4<<20))
 }
 
 func (c *Client) call(ctx context.Context, method string, params url.Values, out any) error {

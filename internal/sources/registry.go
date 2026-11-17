@@ -155,6 +155,17 @@ func (r *Registry) SetCookies(jar cookies.Jar) {
 	}
 }
 
+// ReloadCookies forgets every cookie and applies the jar again, which is what a fresh upload from
+// the bot needs: a domain that disappeared from the file must stop being sent.
+func (r *Registry) ReloadCookies(jar cookies.Jar) {
+	for _, src := range r.byName {
+		if setter, ok := src.(interface{ SetCookies(string) }); ok {
+			setter.SetCookies("")
+		}
+	}
+	r.SetCookies(jar)
+}
+
 // SetToken applies a new access token to every source that supports one.
 func (r *Registry) SetToken(token string) {
 	for _, src := range r.byName {
