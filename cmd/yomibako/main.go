@@ -17,6 +17,7 @@ import (
 
 	"github.com/Mimic890/yomibako/internal/build"
 	"github.com/Mimic890/yomibako/internal/config"
+	"github.com/Mimic890/yomibako/internal/cookies"
 	"github.com/Mimic890/yomibako/internal/logx"
 	"github.com/Mimic890/yomibako/internal/pipeline"
 	"github.com/Mimic890/yomibako/internal/source"
@@ -25,22 +26,22 @@ import (
 	"github.com/Mimic890/yomibako/internal/store"
 )
 
-const usage = `yomibako - загрузка тайтлов в EPUB
+const usage = `yomibako - загрузка тайтлов в EPUB и CBZ
 
 Использование:
-  yomibako search <запрос> [-n 10] [-p 1]
-  yomibako info <slug|ссылка>
-  yomibako volumes <slug|ссылка>
-  yomibako add <slug|ссылка> [--volume 1,2 | --all] [--out DIR] [--dock DIR] [--wait]
+  yomibako info <ссылка>
+  yomibako volumes <ссылка>
+  yomibako add <ссылка> [--volume 1,2 | --chapter 1-10 | --all] [--out DIR] [--dock DIR] [--wait]
   yomibako list
-  yomibako subscribe <slug|ссылка> [--interval 24]
-  yomibako unsubscribe <slug|ссылка>
+  yomibako subscribe <ссылка> [--interval 24]
+  yomibako unsubscribe <ссылка>
   yomibako check
   yomibako sync
   yomibako bot
 
 Флаги:
   -c, --config PATH   файл конфигурации (по умолчанию yomibako.yml)
+      --cookies PATH  cookies.txt из браузера (куки всех источников в одном файле)
   -o, --out DIR       куда складывать EPUB (по умолчанию из конфига)
       --no-images     не встраивать иллюстрации
       --limit N       ограничить число глав в томе (для проверки)
@@ -66,8 +67,6 @@ func run(args []string) error {
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 		return nil
-	case "search":
-		return runSearch(rest)
 	case "info":
 		return runInfo(rest)
 	case "volumes":
@@ -149,79 +148,21 @@ func (c *common) load() (config.Config, *sources.Registry, error) {
 	if c.cookies != "" {
 		cookiesFile = c.cookies
 	}
+
+	registry := sources.New(cfg)
 	if cookiesFile != "" {
-		cookies, err := ranobelib.LoadCookies(cookiesFile)
+		jar, err := cookies.Load(cookiesFile)
 		if err != nil {
 			return cfg, nil, err
 		}
-		cfg.Auth.Cookies = cookies
-	}
-
-	registry := sources.New(cfg)
-	if cfg.Auth.Cookies != "" {
-		registry.SetCookies(cfg.Auth.Cookies)
+		logx.Infof("куки прочитаны для: %s", strings.Join(jar.Domains(), ", "))
+		registry.SetCookies(jar)
 	}
 	return cfg, registry, nil
 }
 
 func contextWithSignals() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-}
-
-// ── search ───────────────────────────────────────────────────────────────────────────────────────
-
-func runSearch(args []string) error {
-	fs := flag.NewFlagSet("search", flag.ContinueOnError)
-	var c common
-	c.register(fs)
-	limit := fs.Int("n", 10, "сколько результатов показать")
-	page := fs.Int("p", 1, "страница")
-	if err := fs.Parse(reorderArgs(args)); err != nil {
-		return err
-	}
-	if fs.NArg() == 0 {
-		return errors.New("нужен поисковый запрос")
-	}
-	query := strings.Join(fs.Args(), " ")
-
-	_, registry, err := c.load()
-	if err != nil {
-		return err
-	}
-	ctx, cancel := contextWithSignals()
-	defer cancel()
-
-	result, err := registry.Default().Search(ctx, query, *page)
-	if err != nil {
-		return err
-	}
-	if len(result.Items) == 0 {
-		fmt.Println("ничего не найдено")
-		return nil
-	}
-	for i, item := range result.Items {
-		if i >= *limit {
-			break
-		}
-		meta := make([]string, 0, 3)
-		if item.Type != "" {
-			meta = append(meta, item.Type)
-		}
-		if item.Status != "" {
-			meta = append(meta, item.Status)
-		}
-		if item.ReleaseDate != "" {
-			meta = append(meta, item.ReleaseDate)
-		}
-		fmt.Printf("%2d. %s\n    %s\n", i+1, item.Title, item.Slug)
-		if len(meta) > 0 {
-			fmt.Printf("    %s\n", strings.Join(meta, " · "))
-		}
-	}
-	if result.HasNextPage {
-		fmt.Printf("\nесть следующая страница: -p %d\n", result.Page+1)
-	}
-	return nil
 }
 
 // ── info ────────────────────────────────────────────────────────────────────────────────────────
@@ -234,13 +175,13 @@ func runInfo(args []string) error {
 		return err
 	}
 	if fs.NArg() == 0 {
-		return errors.New("нужен slug или ссылка")
+		return errors.New("нужна полная ссылка на тайтл")
 	}
 	_, registry, err := c.load()
 	if err != nil {
 		return err
 	}
-	src, slug, err := registry.Resolve(fs.Arg(0))
+	src, slug, err := resolveLink(registry, fs.Arg(0))
 	if err != nil {
 		return err
 	}
@@ -283,13 +224,13 @@ func runVolumes(args []string) error {
 		return err
 	}
 	if fs.NArg() == 0 {
-		return errors.New("нужен slug или ссылка")
+		return errors.New("нужна полная ссылка на тайтл")
 	}
 	_, registry, err := c.load()
 	if err != nil {
 		return err
 	}
-	src, slug, err := registry.Resolve(fs.Arg(0))
+	src, slug, err := resolveLink(registry, fs.Arg(0))
 	if err != nil {
 		return err
 	}
@@ -328,13 +269,13 @@ func runAdd(args []string) error {
 		return err
 	}
 	if fs.NArg() == 0 {
-		return errors.New("нужен slug или ссылка")
+		return errors.New("нужна полная ссылка на тайтл")
 	}
 	cfg, registry, err := c.load()
 	if err != nil {
 		return err
 	}
-	src, slug, err := registry.Resolve(fs.Arg(0))
+	src, slug, err := resolveLink(registry, fs.Arg(0))
 	if err != nil {
 		return err
 	}
@@ -391,6 +332,10 @@ func runAdd(args []string) error {
 			fmt.Printf("%s: %d страниц, %s, %s\n", result.Label, result.Pages, humanSize(result.Size), result.Duration.Round(time.Second))
 			fmt.Println("  ->", result.Path)
 		}
+		return err
+	}
+
+	if err := build.RequireVolumes(volumes); err != nil {
 		return err
 	}
 
@@ -530,7 +475,7 @@ func selectVolumes(volumes []build.Volume, list string, all bool) ([]build.Volum
 }
 
 // reorderArgs moves flags in front of positional arguments. The standard flag package stops at
-// the first non-flag token, so `search "запрос" -n 3` would otherwise treat "-n 3" as part of the
+// the first non-flag token, so `add "<ссылка>" --all` would otherwise treat "--all" as part of the
 // query.
 func reorderArgs(args []string) []string {
 	boolean := map[string]bool{"--no-images": true, "--all": true, "-h": true, "--help": true}
@@ -587,3 +532,12 @@ func humanSize(bytes int) string {
 }
 
 var _ source.Source = (*ranobelib.Source)(nil)
+
+// resolveLink turns a link into its source, with a hint when the user typed a slug instead.
+func resolveLink(registry *sources.Registry, input string) (source.Source, string, error) {
+	src, slug, err := registry.Resolve(input)
+	if errors.Is(err, sources.ErrNotURL) {
+		return nil, "", errors.New("нужна полная ссылка на тайтл, например https://ranobelib.me/ru/book/20818--lord-of-the-mysteries")
+	}
+	return src, slug, err
+}

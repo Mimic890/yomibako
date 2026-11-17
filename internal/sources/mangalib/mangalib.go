@@ -39,6 +39,9 @@ func NewHentaiLib() *Source {
 	return &Source{Client: client, name: "hentailib"}
 }
 
+// SetCookies replaces the Cookie header sent with every request.
+func (s *Source) SetCookies(value string) { s.Client.Cookies = value }
+
 // Name implements source.Source.
 func (s *Source) Name() string { return s.name }
 

@@ -2,8 +2,12 @@
 
 [![ci](https://github.com/Mimic890/yomibako/actions/workflows/ci.yml/badge.svg)](https://github.com/Mimic890/yomibako/actions/workflows/ci.yml)
 
-Загрузка тайтлов с книжных сайтов в BookOrbit: RanobeLib для ранобэ, MangaLib и HentaiLib для
-манги и манхвы.
+Загрузка тайтлов с книжных сайтов в BookOrbit.
+
+Источники ранобэ: **RanobeLib**, **RanobeHub**, **TL.Rulate**. Источники манги и манхвы:
+**MangaLib**, **HentaiLib**.
+
+Тайтл выбирает пользователь: сервису нужна ссылка на книгу, поиска внутри он не делает.
 
 Ранобэ собирается **том целиком** в один EPUB: обложка тома, метаданные, оглавление, иллюстрации
 глав. Манга и манхва собираются **по главам** в CBZ со `ComicInfo.xml`. Готовое никогда не
@@ -77,31 +81,48 @@ go build -o yomibako ./cmd/yomibako
 ## Использование
 
 ```bash
-# поиск
-yomibako search "повелитель тайн" -n 5
-
 # карточка тайтла
-yomibako info lord-of-the-mysteries
+yomibako info https://ranobelib.me/ru/book/20818--lord-of-the-mysteries
 
 # какие есть тома
-yomibako volumes lord-of-the-mysteries
+yomibako volumes https://ranobelib.me/ru/book/20818--lord-of-the-mysteries
 
 # собрать том 1 в ./out/<Название>/Том 01/book.epub
-yomibako add lord-of-the-mysteries --volume 1
+yomibako add https://ranobelib.me/ru/book/20818--lord-of-the-mysteries --volume 1
+
+# другой источник
+yomibako add https://ranobehub.org/ranobe/1034-bleach-cant-fear-your-own-world --volume 1
 
 # манга: одна глава - один CBZ
 yomibako add https://mangalib.me/ru/manga/4464--jujutsu-kaisen --chapter 1
-yomibako add mangalib:4464--jujutsu-kaisen --chapter 1-10
+yomibako add https://mangalib.me/ru/manga/4464--jujutsu-kaisen --chapter 1-10
 
 # все тома
-yomibako add lord-of-the-mysteries --all
+yomibako add https://ranobelib.me/ru/book/20818--lord-of-the-mysteries --all
 
 # несколько томов, без иллюстраций, в свою папку
-yomibako add lord-of-the-mysteries --volume 1,2 --no-images --out /tmp/books
+yomibako add https://ranobelib.me/ru/book/20818--lord-of-the-mysteries --volume 1,2 --no-images --out /tmp/books
 
 # сразу в book-dock BookOrbit и дождаться импорта
-yomibako add lord-of-the-mysteries --volume 1 --dock /srv/docker/bookorbit/data/state/book-dock --wait
+yomibako add https://ranobelib.me/ru/book/20818--lord-of-the-mysteries --volume 1 --dock /srv/docker/bookorbit/data/state/book-dock --wait
 ```
+
+## Источники
+
+| Источник | Что берёт | Как устроен |
+| --- | --- | --- |
+| RanobeLib | ранобэ | JSON API cdnlibs |
+| RanobeHub | ранобэ | страница книги + JSON API глав |
+| TL.Rulate | ранобэ | страница книги и JSON списка глав |
+| MangaLib | манга, манхва | JSON API cdnlibs |
+| HentaiLib | манга, манхва | тот же API, другой site_id |
+
+Ссылка определяет источник сама: `ranobelib.me`, `ranobehub.org`, `tl.rulate.ru`, `mangalib.me`,
+`hentailib.me`. Неизвестный домен - ошибка, а не догадка.
+
+Тома берутся только у источников, где они есть. Если книга на сайте не разделена на тома
+(например, у TL.Rulate том написан в заголовке главы не всегда), сборка отказывается с понятной
+ошибкой, а не режет книгу наугад.
 
 ## База и подписки
 
@@ -132,6 +153,16 @@ EPUB (`urn:ranobelib:<slug>:<том>`), а не по именам папок.
 
 Флаг `--limit N` собирает только первые N глав тома - для проверки, что всё работает, не дожидаясь
 полной загрузки.
+
+## Куки
+
+Один файл `cookies.txt` в формате Netscape на все источники сразу: экспорт из браузера, где ты
+залогинен на нужных сайтах. Сервис берёт из него куки для своего домена, токены внутри куки уже
+есть, отдельно их прописывать не надо.
+
+```bash
+yomibako add <ссылка> --cookies ~/cookies.txt
+```
 
 ## Конфигурация
 
@@ -167,7 +198,7 @@ auth:
 
 ```
 cmd/yomibako/                CLI
-internal/source/             интерфейс источника: поиск, карточка, главы, текст главы, обложки
+internal/source/             интерфейс источника: карточка, главы, текст главы, обложки
 internal/sources/ranobelib/  реализация RanobeLib
 internal/build/              группировка по томам и сборка
 internal/epub/               запись EPUB 3
@@ -195,7 +226,7 @@ yomibako bot
 ```
 
 Отвечает только чату из `telegram.chat_id`. Команды: `/list`, `/add <название|ссылка>`,
-`/search <запрос>`, `/check`, `/sync`, `/subscribe <ссылка> [часы]`, `/unsubscribe`, `/status`,
+`/check`, `/sync`, `/subscribe <ссылка> [часы]`, `/unsubscribe`, `/status`,
 `/cancel`, `/token <токен>`, `/help`.
 
 `/list` отдаётся rich-сообщением: название - ссылка на страницу тайтла, дальше «готово/всего томов»

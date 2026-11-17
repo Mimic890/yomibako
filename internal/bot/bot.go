@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"html"
 	"strconv"
@@ -37,6 +38,13 @@ type Bot struct {
 	mu      sync.Mutex
 	cancel  context.CancelFunc
 	pending map[string]pendingJob
+	picks   map[string]pick
+}
+
+// pick is a slug waiting for the user to say which site it belongs to.
+type pick struct {
+	slug    string
+	created time.Time
 }
 
 // pendingJob is a build waiting for confirmation. It is kept in memory: a confirmation that
@@ -70,23 +78,45 @@ func New(cfg config.Config, registry *sources.Registry, st *store.Store) *Bot {
 		allowed:  cfg.Telegram.ChatID,
 		jobs:     make(chan job, 8),
 		pending:  make(map[string]pendingJob),
+		picks:    make(map[string]pick),
 	}
 }
 
-const helpText = `<b>Yomibako</b>
+// help is the /start message: what the service reads from, and what it can do.
+func (b *Bot) help() string {
+	return fmt.Sprintf(`<b>Yomibako</b>
 
-/list - что уже в базе
-/add &lt;название|ссылка&gt; - выбрать тома или главы и собрать
-/search &lt;запрос&gt; - найти тайтл
+Источники ранобэ: %s
+Источники манги и манхвы: %s
+
+/add &lt;ссылка&gt; - выбрать тома или главы и собрать
 /check - новые тома и новые главы
 /sync - сверить базу с библиотекой
-/subscribe &lt;ссылка|slug&gt; [часы] - следить за тайтлом
-/unsubscribe &lt;ссылка|slug&gt; - перестать следить
+/list - что уже в базе
+/subscribe &lt;ссылка&gt; [часы] - следить за тайтлом
+/unsubscribe &lt;ссылка&gt; - перестать следить
 /status - сводка
 /cancel - прервать текущую сборку
 /token &lt;токен&gt; - обновить токен RanobeLib
 
-Ссылку можно давать любую: ranobelib.me, mangalib.me, hentailib.me. Без ссылки ищет на RanobeLib.`
+Тайтл выбираешь ты: сервису нужна ссылка на книгу, поиска он больше не делает.`,
+		b.sourceList(source.KindNovel), b.sourceList(source.KindManga))
+}
+
+// sourceList renders the labels of the sources of one kind.
+func (b *Bot) sourceList(kind source.Kind) string {
+	var list []source.Source
+	if kind == source.KindNovel {
+		list = b.registry.Novels()
+	} else {
+		list = b.registry.Manga()
+	}
+	labels := make([]string, 0, len(list))
+	for _, src := range list {
+		labels = append(labels, b.registry.Label(src.Name()))
+	}
+	return strings.Join(labels, ", ")
+}
 
 // Run polls for updates until the context is cancelled.
 func (b *Bot) Run(ctx context.Context) error {
@@ -110,7 +140,6 @@ func (b *Bot) Run(ctx context.Context) error {
 	_ = b.api.SetMyCommands(ctx, [][2]string{
 		{"list", "что уже в базе"},
 		{"add", "собрать том или главу и отдать в BookOrbit"},
-		{"search", "найти тайтл"},
 		{"check", "новые тома и главы"},
 		{"sync", "сверить базу с библиотекой"},
 		{"subscribe", "следить за тайтлом"},
@@ -169,7 +198,7 @@ func (b *Bot) handle(ctx context.Context, message *telegram.Message) {
 
 	switch command {
 	case "start", "help":
-		b.reply(ctx, message.Chat.ID, helpText)
+		b.reply(ctx, message.Chat.ID, b.help())
 	case "list":
 		b.list(ctx, message.Chat.ID)
 	case "status":
@@ -184,8 +213,6 @@ func (b *Bot) handle(ctx context.Context, message *telegram.Message) {
 		b.setToken(ctx, message.Chat.ID, args)
 	case "add":
 		b.add(ctx, message.Chat.ID, args)
-	case "search":
-		b.search(ctx, message.Chat.ID, args)
 	case "subscribe":
 		b.subscribe(ctx, message.Chat.ID, args, true)
 	case "unsubscribe":
@@ -384,7 +411,7 @@ func (b *Bot) setToken(ctx context.Context, chatID int64, args []string) {
 
 func (b *Bot) add(ctx context.Context, chatID int64, args []string) {
 	if len(args) == 0 {
-		b.reply(ctx, chatID, "нужно название или ссылка: /add &lt;название&gt;")
+		b.reply(ctx, chatID, "нужна ссылка на тайтл: /add &lt;ссылка&gt;")
 		return
 	}
 	if b.cfg.BookDock == "" {
@@ -392,50 +419,33 @@ func (b *Bot) add(ctx context.Context, chatID int64, args []string) {
 		return
 	}
 
-	query := strings.Join(args, " ")
-	src, slug, err := b.registry.Resolve(query)
+	link := strings.Join(args, " ")
+	src, slug, err := b.registry.Resolve(link)
+	if errors.Is(err, sources.ErrNotURL) {
+		// Not a link: the user typed a slug, so ask which site it belongs to.
+		b.askSource(ctx, chatID, link)
+		return
+	}
 	if err != nil {
 		b.reply(ctx, chatID, html.EscapeString(err.Error()))
 		return
 	}
-	title, err := src.Title(ctx, slug)
-	if err != nil {
-		// Not a slug: search and let the user pick the title first.
-		b.searchWith(ctx, chatID, src, args)
-		return
-	}
-	b.showUnits(ctx, chatID, src, title.Slug, 1)
+	b.showUnits(ctx, chatID, src, slug, 1)
 }
 
-// search lists matching titles as buttons.
-func (b *Bot) search(ctx context.Context, chatID int64, args []string) {
-	if len(args) == 0 {
-		b.reply(ctx, chatID, "нужен поисковый запрос")
-		return
+// askSource turns a bare slug into a question: the same slug may exist on several sites, and only
+// the user knows which one was meant.
+func (b *Bot) askSource(ctx context.Context, chatID int64, slug string) {
+	token := b.rememberPick(slug)
+	rows := make([][]telegram.Button, 0, 5)
+	for _, src := range b.registry.All() {
+		rows = append(rows, []telegram.Button{{
+			Text: b.registry.Label(src.Name()),
+			Data: "s:" + src.Name() + ":" + token,
+		}})
 	}
-	b.searchWith(ctx, chatID, b.registry.Default(), args)
-}
-
-func (b *Bot) searchWith(ctx context.Context, chatID int64, src source.Source, args []string) {
-	query := strings.Join(args, " ")
-	result, err := src.Search(ctx, query, 1)
-	if err != nil {
-		b.reply(ctx, chatID, "ошибка поиска: "+html.EscapeString(err.Error()))
-		return
-	}
-	if len(result.Items) == 0 {
-		b.reply(ctx, chatID, "ничего не найдено")
-		return
-	}
-
-	rows := make([][]telegram.Button, 0, len(result.Items))
-	for i, item := range result.Items {
-		if i >= 8 {
-			break
-		}
-		rows = append(rows, []telegram.Button{{Text: item.Title, Data: "t:" + src.Name() + ":" + item.Slug}})
-	}
-	if _, err := b.api.SendMessageWithKeyboard(ctx, chatID, "выбери тайтл:", rows); err != nil {
+	text := fmt.Sprintf("С какого сайта взять «%s»?", html.EscapeString(slug))
+	if _, err := b.api.SendMessageWithKeyboard(ctx, chatID, text, rows); err != nil {
 		logx.Errorf("telegram: %v", err)
 	}
 }
@@ -461,8 +471,8 @@ func (b *Bot) showVolumes(ctx context.Context, chatID int64, src source.Source, 
 		return
 	}
 	volumes := build.GroupVolumes(chapters)
-	if len(volumes) == 0 {
-		b.reply(ctx, chatID, "у тайтла нет глав")
+	if err := build.RequireVolumes(volumes); err != nil {
+		b.reply(ctx, chatID, html.EscapeString(err.Error()))
 		return
 	}
 
@@ -554,6 +564,17 @@ func (b *Bot) handleCallback(ctx context.Context, query *telegram.CallbackQuery)
 				b.confirm(ctx, chatID, src, parts[2], nil, true)
 			}
 		}
+	case "s":
+		if len(parts) == 3 {
+			slug, ok := b.takePick(parts[2])
+			if !ok {
+				b.reply(ctx, chatID, "выбор устарел, пришли ссылку заново")
+				return
+			}
+			if src, found := b.registry.ByName(parts[1]); found {
+				b.showUnits(ctx, chatID, src, slug, 1)
+			}
+		}
 	case "go":
 		if len(parts) == 2 {
 			b.startPending(ctx, chatID, parts[1])
@@ -578,6 +599,10 @@ func (b *Bot) confirm(ctx context.Context, chatID int64, src source.Source, slug
 		return
 	}
 	groups := build.GroupVolumes(chapters)
+	if err := build.RequireVolumes(groups); err != nil {
+		b.reply(ctx, chatID, html.EscapeString(err.Error()))
+		return
+	}
 
 	titleID, _ := b.st.UpsertTitle(ctx, store.Title{
 		Source:        src.Name(),
@@ -679,6 +704,32 @@ func (b *Bot) remember(job pendingJob) string {
 	return token
 }
 
+// rememberPick stores a slug and returns a token for the source buttons.
+func (b *Bot) rememberPick(slug string) string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for token, item := range b.picks {
+		if time.Since(item.created) > 10*time.Minute {
+			delete(b.picks, token)
+		}
+	}
+	token := randomToken()
+	b.picks[token] = pick{slug: slug, created: time.Now()}
+	return token
+}
+
+// takePick returns the slug behind a token and forgets it.
+func (b *Bot) takePick(token string) (string, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	item, ok := b.picks[token]
+	delete(b.picks, token)
+	if !ok || time.Since(item.created) > 10*time.Minute {
+		return "", false
+	}
+	return item.slug, true
+}
+
 // startPending enqueues a confirmed job.
 func (b *Bot) startPending(ctx context.Context, chatID int64, token string) {
 	b.mu.Lock()
@@ -729,7 +780,7 @@ func (b *Bot) enqueueChapters(ctx context.Context, chatID int64, sourceName, slu
 
 func (b *Bot) subscribe(ctx context.Context, chatID int64, args []string, subscribe bool) {
 	if len(args) == 0 {
-		b.reply(ctx, chatID, "нужна ссылка или slug")
+		b.reply(ctx, chatID, "нужна ссылка на тайтл")
 		return
 	}
 	src, slug, err := b.registry.Resolve(args[0])
@@ -839,8 +890,8 @@ func (b *Bot) runJob(ctx context.Context, task job) {
 		return
 	}
 	volumes := build.GroupVolumes(chapters)
-	if len(volumes) == 0 {
-		edit("у тайтла нет глав")
+	if err := build.RequireVolumes(volumes); err != nil {
+		edit(html.EscapeString(err.Error()))
 		return
 	}
 

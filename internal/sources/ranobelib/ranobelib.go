@@ -23,6 +23,9 @@ func New() *Source { return &Source{Client: NewClient()} }
 // SetToken replaces the access token used for requests.
 func (s *Source) SetToken(token string) { s.Client.Token = token }
 
+// SetCookies replaces the Cookie header sent with every request.
+func (s *Source) SetCookies(value string) { s.Client.Cookies = value }
+
 // Name implements source.Source.
 func (s *Source) Name() string { return "ranobelib" }
 

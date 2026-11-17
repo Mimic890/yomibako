@@ -55,6 +55,8 @@ type Chapter struct {
 	Name         string
 	DisplayTitle string
 	BranchID     int
+	// Ref is the source's own identifier for the chapter, used when fetching its body.
+	Ref string
 	// Branches is how many translation variants the source lists for this chapter. The chapter
 	// itself is one, but readers that list every variant show more entries than there are chapters.
 	Branches int

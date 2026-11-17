@@ -3,6 +3,7 @@ package build
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -52,6 +53,21 @@ func volumeNumber(label string) int {
 		return n
 	}
 	return 0
+}
+
+// ErrNoVolumes is returned for a title whose source does not split chapters into volumes. The
+// service will not guess where a volume ends: such a title has to wait for an explicit rule.
+var ErrNoVolumes = errors.New("у этого источника нет деления на тома, так собирать пока нельзя")
+
+// RequireVolumes rejects a single unnamed group, which is what a source without volumes produces.
+func RequireVolumes(volumes []Volume) error {
+	if len(volumes) == 0 {
+		return errors.New("у тайтла нет глав")
+	}
+	if len(volumes) == 1 && volumes[0].Label == "0" {
+		return ErrNoVolumes
+	}
+	return nil
 }
 
 // Variants counts every translation variant of every chapter, which is the number a reader that

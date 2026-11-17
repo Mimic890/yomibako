@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/Mimic890/yomibako/internal/build"
@@ -47,10 +48,11 @@ func TestResolve(t *testing.T) {
 		source string
 		slug   string
 	}{
-		{"lord-of-the-mysteries", "ranobelib", "lord-of-the-mysteries"},
 		{"https://ranobelib.me/ru/book/20818--lord-of-the-mysteries", "ranobelib", "20818--lord-of-the-mysteries"},
 		{"https://mangalib.me/ru/manga/4464--jujutsu-kaisen", "mangalib", "4464--jujutsu-kaisen"},
-		{"mangalib:4464--jujutsu-kaisen", "mangalib", "4464--jujutsu-kaisen"},
+		{"https://ranobehub.org/ranobe/1034-bleach-cant-fear-your-own-world", "ranobehub", "1034-bleach-cant-fear-your-own-world"},
+		{"https://tl.rulate.ru/book/102204", "rulate", "102204"},
+		{"https://tl.rulate.ru/book/102204/ya-prevratil", "rulate", "102204"},
 	}
 	for _, tc := range cases {
 		src, slug, err := registry.Resolve(tc.input)
@@ -61,6 +63,10 @@ func TestResolve(t *testing.T) {
 		if src.Name() != tc.source || slug != tc.slug {
 			t.Errorf("Resolve(%q) = %s, %q; want %s, %q", tc.input, src.Name(), slug, tc.source, tc.slug)
 		}
+	}
+
+	if _, _, err := registry.Resolve("lord-of-the-mysteries"); !errors.Is(err, sources.ErrNotURL) {
+		t.Errorf("a bare slug must be refused, got %v", err)
 	}
 }
 
