@@ -38,14 +38,16 @@ type Bot struct {
 	st       *store.Store
 	allowed  int64
 
-	mu      sync.Mutex
-	cancels map[string]context.CancelFunc
-	pending map[string]pendingJob
-	picks   map[string]pick
-	tasks   []*task
-	busy    map[string]bool
-	flow    map[int64][]int64
-	deletes map[string]deleteTarget
+	mu       sync.Mutex
+	cancels  map[string]context.CancelFunc
+	pending  map[string]pendingJob
+	picks    map[string]pick
+	tasks    []*task
+	busy     map[string]bool
+	flow     map[int64][]int64
+	deletes  map[string]deleteTarget
+	queueMsg map[int64]int64
+	watching map[int64]bool
 }
 
 // deleteTarget is a title waiting for the user to confirm its removal.
@@ -111,6 +113,8 @@ func New(cfg config.Config, registry *sources.Registry, st *store.Store) *Bot {
 		cancels:  make(map[string]context.CancelFunc),
 		flow:     make(map[int64][]int64),
 		deletes:  make(map[string]deleteTarget),
+		queueMsg: make(map[int64]int64),
+		watching: make(map[int64]bool),
 	}
 }
 
@@ -260,7 +264,7 @@ func (b *Bot) handle(ctx context.Context, message *telegram.Message) {
 	case "delete":
 		b.deleteTitle(ctx, message.Chat.ID, args)
 	case "queue":
-		b.reply(ctx, message.Chat.ID, b.queueText())
+		b.showQueue(ctx, message.Chat.ID)
 	case "cookie_clear", "cookie-clear":
 		b.clearCookies(ctx, message.Chat.ID)
 	case "add":
@@ -1054,6 +1058,14 @@ func (b *Bot) addTask(ctx context.Context, chatID int64, t *task) {
 	}
 	t.messageID = messageID
 
+	// A queue message already on screen should follow the new task too.
+	b.mu.Lock()
+	queueMessage, hasQueue := b.queueMsg[chatID]
+	b.mu.Unlock()
+	if hasQueue {
+		b.watchQueue(ctx, chatID, queueMessage)
+	}
+
 	go b.dispatch(ctx)
 }
 
@@ -1203,6 +1215,77 @@ func (b *Bot) sweep() {
 		kept = append(kept, t)
 	}
 	b.tasks = kept
+}
+
+// showQueue prints the queue and keeps the message up to date while anything is downloading.
+func (b *Bot) showQueue(ctx context.Context, chatID int64) {
+	text := b.queueText()
+
+	b.mu.Lock()
+	messageID, known := b.queueMsg[chatID]
+	b.mu.Unlock()
+
+	if known {
+		if err := b.api.EditMessage(ctx, chatID, messageID, text); err == nil {
+			b.watchQueue(ctx, chatID, messageID)
+			return
+		}
+	}
+
+	sent, err := b.api.SendMessage(ctx, chatID, text)
+	if err != nil {
+		logx.Errorf("telegram: %v", err)
+		return
+	}
+	b.mu.Lock()
+	b.queueMsg[chatID] = sent
+	b.mu.Unlock()
+	b.watchQueue(ctx, chatID, sent)
+}
+
+// watchQueue refreshes the queue message every few seconds until the queue drains.
+func (b *Bot) watchQueue(ctx context.Context, chatID, messageID int64) {
+	b.mu.Lock()
+	if b.watching[chatID] {
+		b.mu.Unlock()
+		return
+	}
+	b.watching[chatID] = true
+	b.mu.Unlock()
+
+	go func() {
+		defer func() {
+			b.mu.Lock()
+			b.watching[chatID] = false
+			b.mu.Unlock()
+		}()
+
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				_ = b.api.EditMessage(ctx, chatID, messageID, b.queueText())
+				if !b.hasActive() {
+					return
+				}
+			}
+		}
+	}()
+}
+
+// hasActive tells whether anything is downloading or waiting.
+func (b *Bot) hasActive() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, t := range b.tasks {
+		if t.status == "queued" || t.status == "running" {
+			return true
+		}
+	}
+	return false
 }
 
 // queueText renders the queue grouped by source: what is downloading now and what waits.
