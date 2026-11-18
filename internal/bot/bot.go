@@ -203,6 +203,7 @@ func (b *Bot) Run(ctx context.Context) error {
 	if err := b.api.SetMyCommands(ctx, [][2]string{
 		{"list", "что уже в базе"},
 		{"add", "собрать том или главу и отдать в BookOrbit"},
+		{"convert", "пересобрать тайтл в другой раскладке"},
 		{"check", "новые тома и главы"},
 		{"sync", "сверить базу с библиотекой"},
 		{"queue", "что качается и что в очереди"},
