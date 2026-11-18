@@ -1225,11 +1225,10 @@ func (b *Bot) showQueue(ctx context.Context, chatID int64) {
 	messageID, known := b.queueMsg[chatID]
 	b.mu.Unlock()
 
+	// The old message is replaced rather than edited: an edit leaves it where it was, far above
+	// the new commands, and the user never sees the numbers change.
 	if known {
-		if err := b.api.EditMessage(ctx, chatID, messageID, text); err == nil {
-			b.watchQueue(ctx, chatID, messageID)
-			return
-		}
+		_ = b.api.DeleteMessage(ctx, chatID, messageID)
 	}
 
 	sent, err := b.api.SendMessage(ctx, chatID, text)
