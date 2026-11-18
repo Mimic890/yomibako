@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -44,6 +45,14 @@ type Bot struct {
 	tasks   []*task
 	busy    map[string]bool
 	flow    map[int64][]int64
+	deletes map[string]deleteTarget
+}
+
+// deleteTarget is a title waiting for the user to confirm its removal.
+type deleteTarget struct {
+	titleID int64
+	title   string
+	created time.Time
 }
 
 // pick is a slug waiting for the user to say which site it belongs to.
@@ -101,6 +110,7 @@ func New(cfg config.Config, registry *sources.Registry, st *store.Store) *Bot {
 		busy:     make(map[string]bool),
 		cancels:  make(map[string]context.CancelFunc),
 		flow:     make(map[int64][]int64),
+		deletes:  make(map[string]deleteTarget),
 	}
 }
 
@@ -118,6 +128,7 @@ func (b *Bot) help() string {
 /subscribe &lt;ссылка&gt; - следить за тайтлом (проверка по /check)
 /unsubscribe &lt;ссылка&gt; - перестать следить
 /queue - что качается и что в очереди
+/delete [ссылка] - удалить тайтл из базы и дока
 /status - сводка
 /cancel - прервать текущую сборку
 /cookie - куки: состояние и кнопки, по какой ссылке их присылать
@@ -171,6 +182,7 @@ func (b *Bot) Run(ctx context.Context) error {
 		{"subscribe", "следить за тайтлом"},
 		{"unsubscribe", "перестать следить"},
 		{"queue", "что качается и что в очереди"},
+		{"delete", "удалить тайтл из базы и дока"},
 		{"status", "сводка"},
 		{"cancel", "прервать текущую сборку"},
 		{"cookie", "куки: состояние и обновление"},
@@ -245,6 +257,8 @@ func (b *Bot) handle(ctx context.Context, message *telegram.Message) {
 		b.cancelJob(ctx, message.Chat.ID)
 	case "cookie":
 		b.cookie(ctx, message.Chat.ID, args)
+	case "delete":
+		b.deleteTitle(ctx, message.Chat.ID, args)
 	case "queue":
 		b.reply(ctx, message.Chat.ID, b.queueText())
 	case "cookie_clear", "cookie-clear":
@@ -788,6 +802,23 @@ func (b *Bot) handleCallback(ctx context.Context, query *telegram.CallbackQuery)
 				}
 			}
 		}
+	case "del":
+		if len(parts) == 2 {
+			if item, ok := b.peekDelete(parts[1]); ok {
+				b.confirmDelete(ctx, chatID, item.titleID, item.title)
+			}
+		}
+	case "delok":
+		if len(parts) == 2 {
+			if item, ok := b.takeDelete(parts[1]); ok {
+				b.removeTitle(ctx, chatID, item.titleID, item.title)
+			}
+		}
+	case "delno":
+		if len(parts) == 2 {
+			b.takeDelete(parts[1])
+			b.reply(ctx, chatID, "отмена")
+		}
 	case "ck":
 		if len(parts) == 2 {
 			b.cookieHelp(ctx, chatID, parts[1])
@@ -1219,6 +1250,159 @@ func (b *Bot) queueText() string {
 		}
 	}
 	return out.String()
+}
+
+// deleteTitle asks which title to forget, or confirms the one from the link.
+func (b *Bot) deleteTitle(ctx context.Context, chatID int64, args []string) {
+	if len(args) == 0 {
+		titles, err := b.st.Titles(ctx)
+		if err != nil {
+			b.reply(ctx, chatID, "ошибка базы: "+html.EscapeString(err.Error()))
+			return
+		}
+		if len(titles) == 0 {
+			b.reply(ctx, chatID, "в базе пусто")
+			return
+		}
+		rows := make([][]telegram.Button, 0, len(titles))
+		for _, title := range titles {
+			token := b.rememberDelete(title.ID, title.Title)
+			rows = append(rows, []telegram.Button{{
+				Text: title.Title,
+				Data: "del:" + token,
+			}})
+		}
+		b.flowMessage(ctx, chatID, "Что удалить?", rows)
+		return
+	}
+
+	src, slug, err := b.registry.Resolve(args[0])
+	if err != nil {
+		b.reply(ctx, chatID, html.EscapeString(err.Error()))
+		return
+	}
+	title, err := b.st.FindTitle(ctx, src.Name(), slug)
+	if err != nil {
+		b.reply(ctx, chatID, "ошибка базы: "+html.EscapeString(err.Error()))
+		return
+	}
+	if title == nil {
+		b.reply(ctx, chatID, "такого тайтла в базе нет")
+		return
+	}
+	if b.inQueue(title.Source, title.Slug) {
+		b.reply(ctx, chatID, "тайтл сейчас качается, сначала /cancel")
+		return
+	}
+	b.confirmDelete(ctx, chatID, title.ID, title.Title)
+}
+
+// confirmDelete shows what will happen to the files before anything is removed.
+func (b *Bot) confirmDelete(ctx context.Context, chatID int64, titleID int64, name string) {
+	volumes, err := b.st.Volumes(ctx, titleID)
+	if err != nil {
+		b.reply(ctx, chatID, "ошибка базы: "+html.EscapeString(err.Error()))
+		return
+	}
+	inDock, imported := 0, 0
+	for _, volume := range volumes {
+		if volume.Status == store.StatusImported {
+			imported++
+			continue
+		}
+		if volume.FilePath != "" {
+			inDock++
+		}
+	}
+
+	text := fmt.Sprintf("<b>%s</b>\nтомов в доке: %d (файлы удалю)\nимпортировано: %d (файлы в библиотеке останутся)",
+		html.EscapeString(name), inDock, imported)
+	token := b.rememberDelete(titleID, name)
+	b.flowMessage(ctx, chatID, text, [][]telegram.Button{
+		{{Text: "Удалить", Data: "delok:" + token}},
+		{{Text: "Отмена", Data: "delno:" + token}},
+	})
+}
+
+// removeTitle deletes the dock files and forgets the title.
+func (b *Bot) removeTitle(ctx context.Context, chatID int64, titleID int64, name string) {
+	volumes, err := b.st.Volumes(ctx, titleID)
+	if err != nil {
+		b.reply(ctx, chatID, "ошибка базы: "+html.EscapeString(err.Error()))
+		return
+	}
+
+	removed := 0
+	for _, volume := range volumes {
+		if volume.Status == store.StatusImported || volume.FilePath == "" {
+			continue
+		}
+		// Only files inside the dock are ours to delete; the library is read-only.
+		if b.cfg.BookDock == "" || !strings.HasPrefix(volume.FilePath, b.cfg.BookDock) {
+			continue
+		}
+		if err := os.Remove(volume.FilePath); err != nil && !os.IsNotExist(err) {
+			logx.Warnf("удаление %s: %v", volume.FilePath, err)
+			continue
+		}
+		removed++
+	}
+
+	if err := b.st.DeleteTitle(ctx, titleID); err != nil {
+		b.reply(ctx, chatID, "ошибка базы: "+html.EscapeString(err.Error()))
+		return
+	}
+	logx.Infof("тайтл удалён: %s, файлов %d", name, removed)
+	b.reply(ctx, chatID, fmt.Sprintf("удалено: %s\nфайлов из дока: %d", html.EscapeString(name), removed))
+}
+
+// inQueue tells whether a title is being built or waits for its turn.
+func (b *Bot) inQueue(sourceName, slug string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, t := range b.tasks {
+		if t.source == sourceName && t.slug == slug && (t.status == "queued" || t.status == "running") {
+			return true
+		}
+	}
+	return false
+}
+
+// rememberDelete stores a title waiting for confirmation.
+func (b *Bot) rememberDelete(titleID int64, name string) string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for token, item := range b.deletes {
+		if time.Since(item.created) > 10*time.Minute {
+			delete(b.deletes, token)
+		}
+	}
+	token := randomToken()
+	b.deletes[token] = deleteTarget{titleID: titleID, title: name, created: time.Now()}
+	return token
+}
+
+// peekDelete returns the title behind a token without consuming it.
+func (b *Bot) peekDelete(token string) (deleteTarget, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	item, ok := b.deletes[token]
+	if !ok || time.Since(item.created) > 10*time.Minute {
+		return deleteTarget{}, false
+	}
+	return item, true
+}
+
+// takeDelete returns the title behind a token and forgets it.
+func (b *Bot) takeDelete(token string) (deleteTarget, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	item, ok := b.deletes[token]
+	delete(b.deletes, token)
+	if !ok || time.Since(item.created) > 10*time.Minute {
+		return deleteTarget{}, false
+	}
+	return item, true
 }
 
 // ── queue ─────────────────────────────────────────────────────────────────────────────────────

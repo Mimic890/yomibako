@@ -541,3 +541,24 @@ func (s *Store) SetTitleStatus(ctx context.Context, titleID int64, status string
 		status, now(), titleID)
 	return err
 }
+
+// DeleteTitle removes a title with its volumes and subscription. Files on disk are the caller's
+// business: the database only forgets what it knew.
+func (s *Store) DeleteTitle(ctx context.Context, titleID int64) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for _, statement := range []string{
+		`DELETE FROM volumes WHERE title_id = ?`,
+		`DELETE FROM subscriptions WHERE title_id = ?`,
+		`DELETE FROM titles WHERE id = ?`,
+	} {
+		if _, err := tx.ExecContext(ctx, statement, titleID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
