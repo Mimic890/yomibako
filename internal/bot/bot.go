@@ -1608,7 +1608,8 @@ func (b *Bot) runTask(ctx context.Context, task *task) {
 		OnVolume: func(done, total int, result pipeline.Result) {
 			b.mu.Lock()
 			task.volDone = done
-			task.chDone += result.Chapters
+			// Chapters of this volume were already counted one by one while it was built.
+			task.chDone = task.chBase + result.Chapters
 			task.chBase = task.chDone
 			b.mu.Unlock()
 		},
