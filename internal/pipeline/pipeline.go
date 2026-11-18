@@ -133,7 +133,12 @@ func runNovel(ctx context.Context, opts Options) ([]Result, error) {
 			return results, fmt.Errorf("%s: %w", build.Display(volume), err)
 		}
 
-		path, err := writeFile(opts, unitName(opts, volume)+".epub", VolumeDirName(volume), "book.epub", built.Bytes)
+		dirName := VolumeDirName(volume)
+		if opts.Layout == build.LayoutSingle {
+			// One file for the whole title: the folder would repeat the title otherwise.
+			dirName = "single"
+		}
+		path, err := writeFile(opts, unitName(opts, volume)+".epub", dirName, "book.epub", built.Bytes)
 		if err != nil {
 			return results, err
 		}

@@ -199,3 +199,58 @@ func TestSettings(t *testing.T) {
 		t.Fatalf("unexpected setting: %q, %v, %v", value, ok, err)
 	}
 }
+
+func TestPruneVolumesKeepsTheNewLayout(t *testing.T) {
+	st := openTest(t)
+	ctx := context.Background()
+
+	id, err := st.UpsertTitle(ctx, Title{Source: "mangalib", Slug: "1--x", Title: "Икс"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, volume := range []Volume{
+		{Label: "1", Number: 1, Format: "cbz", FilePath: "/dock/Икс - Том 1.cbz", Status: StatusBuilt},
+		{Label: "2", Number: 2, Format: "cbz", FilePath: "/dock/Икс - Том 2.cbz", Status: StatusBuilt},
+	} {
+		volume.TitleID = id
+		if err := st.RecordVolume(ctx, volume); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// A conversion to one file keeps nothing from the old layout.
+	removed, err := st.PruneVolumes(ctx, id, []string{"/dock/Икс.cbz"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(removed) != 2 {
+		t.Fatalf("expected 2 removed paths, got %d", len(removed))
+	}
+	labels, err := st.VolumeLabels(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(labels) != 0 {
+		t.Fatalf("volumes survived the prune: %v", labels)
+	}
+}
+
+func TestSetLayoutIsRemembered(t *testing.T) {
+	st := openTest(t)
+	ctx := context.Background()
+
+	id, err := st.UpsertTitle(ctx, Title{Source: "mangalib", Slug: "1--x", Title: "Икс"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetLayout(ctx, id, "chapters", "epub"); err != nil {
+		t.Fatal(err)
+	}
+	titles, err := st.Titles(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(titles) != 1 || titles[0].Layout != "chapters" || titles[0].Format != "epub" {
+		t.Fatalf("layout not stored: %+v", titles)
+	}
+}
