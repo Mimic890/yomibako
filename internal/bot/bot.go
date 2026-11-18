@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"html"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"github.com/Mimic890/yomibako/internal/check"
 	"github.com/Mimic890/yomibako/internal/config"
 	"github.com/Mimic890/yomibako/internal/cookies"
+	"github.com/Mimic890/yomibako/internal/imgutil"
 	"github.com/Mimic890/yomibako/internal/logx"
 	"github.com/Mimic890/yomibako/internal/pipeline"
 	"github.com/Mimic890/yomibako/internal/reconcile"
@@ -38,16 +40,25 @@ type Bot struct {
 	st       *store.Store
 	allowed  int64
 
-	mu       sync.Mutex
-	cancels  map[string]context.CancelFunc
-	pending  map[string]pendingJob
-	picks    map[string]pick
-	tasks    []*task
-	busy     map[string]bool
-	flow     map[int64][]int64
-	deletes  map[string]deleteTarget
-	queueMsg map[int64]int64
-	watching map[int64]bool
+	mu        sync.Mutex
+	cancels   map[string]context.CancelFunc
+	pending   map[string]pendingJob
+	picks     map[string]pick
+	tasks     []*task
+	busy      map[string]bool
+	flow      map[int64][]int64
+	deletes   map[string]deleteTarget
+	coverWait map[int64]coverRequest
+	queueMsg  map[int64]int64
+	watching  map[int64]bool
+}
+
+// coverRequest is a volume whose cover the user promised to send.
+type coverRequest struct {
+	source  string
+	slug    string
+	label   string
+	created time.Time
 }
 
 // deleteTarget is a title waiting for the user to confirm its removal.
@@ -103,19 +114,20 @@ type task struct {
 // New builds a bot from the configuration.
 func New(cfg config.Config, registry *sources.Registry, st *store.Store) *Bot {
 	return &Bot{
-		api:      telegram.New(cfg.Telegram.Token),
-		cfg:      cfg,
-		registry: registry,
-		st:       st,
-		allowed:  cfg.Telegram.ChatID,
-		pending:  make(map[string]pendingJob),
-		picks:    make(map[string]pick),
-		busy:     make(map[string]bool),
-		cancels:  make(map[string]context.CancelFunc),
-		flow:     make(map[int64][]int64),
-		deletes:  make(map[string]deleteTarget),
-		queueMsg: make(map[int64]int64),
-		watching: make(map[int64]bool),
+		api:       telegram.New(cfg.Telegram.Token),
+		cfg:       cfg,
+		registry:  registry,
+		st:        st,
+		allowed:   cfg.Telegram.ChatID,
+		pending:   make(map[string]pendingJob),
+		picks:     make(map[string]pick),
+		busy:      make(map[string]bool),
+		cancels:   make(map[string]context.CancelFunc),
+		flow:      make(map[int64][]int64),
+		deletes:   make(map[string]deleteTarget),
+		coverWait: make(map[int64]coverRequest),
+		queueMsg:  make(map[int64]int64),
+		watching:  make(map[int64]bool),
 	}
 }
 
@@ -131,6 +143,7 @@ func (b *Bot) help() string {
 /sync - сверить базу с библиотекой
 /list - что уже в базе
 /queue - что качается и что в очереди
+/cover &lt;ссылка&gt; &lt;том&gt; - своя обложка для тома
 /delete [ссылка] - удалить тайтл из базы и дока
 /status - сводка
 /cancel - прервать текущую сборку
@@ -183,6 +196,7 @@ func (b *Bot) Run(ctx context.Context) error {
 		{"check", "новые тома и главы"},
 		{"sync", "сверить базу с библиотекой"},
 		{"queue", "что качается и что в очереди"},
+		{"cover", "поставить свою обложку тому"},
 		{"delete", "удалить тайтл из базы и дока"},
 		{"status", "сводка"},
 		{"cancel", "прервать текущую сборку"},
@@ -224,7 +238,15 @@ func (b *Bot) handle(ctx context.Context, message *telegram.Message) {
 	if message.Chat.ID != b.allowed {
 		return
 	}
-	// A file drop is how cookies get refreshed: export from the browser, send here.
+	// A picture is a cover for the volume the user just named; any other file is a cookie export.
+	if req, ok := b.takeCover(message.Chat.ID); ok {
+		if fileID := imageFileID(message); fileID != "" {
+			b.saveCover(ctx, message.Chat.ID, req, fileID)
+			return
+		}
+		b.reply(ctx, message.Chat.ID, "это не картинка, обложка не сохранилась")
+		return
+	}
 	if message.Document != nil {
 		b.saveCookies(ctx, message.Chat.ID, message.Document)
 		return
@@ -258,6 +280,8 @@ func (b *Bot) handle(ctx context.Context, message *telegram.Message) {
 		b.cancelJob(ctx, message.Chat.ID)
 	case "cookie":
 		b.cookie(ctx, message.Chat.ID, args)
+	case "cover":
+		b.cover(ctx, message.Chat.ID, args)
 	case "delete":
 		b.deleteTitle(ctx, message.Chat.ID, args)
 	case "queue":
@@ -1269,6 +1293,114 @@ func (b *Bot) queueText() string {
 	return out.String()
 }
 
+// cover remembers which volume is waiting for a picture, so the next image sent becomes its cover.
+func (b *Bot) cover(ctx context.Context, chatID int64, args []string) {
+	if len(args) < 2 {
+		b.reply(ctx, chatID, "формат: /cover <ссылка> <том>")
+		return
+	}
+	src, slug, err := b.registry.Resolve(args[0])
+	if err != nil {
+		b.reply(ctx, chatID, html.EscapeString(err.Error()))
+		return
+	}
+	title, err := src.Title(ctx, slug)
+	if err != nil {
+		b.reply(ctx, chatID, "не нашёл: "+html.EscapeString(err.Error()))
+		return
+	}
+	chapters, err := src.Chapters(ctx, title.Slug)
+	if err != nil {
+		b.reply(ctx, chatID, "ошибка: "+html.EscapeString(err.Error()))
+		return
+	}
+	volumes, err := build.PlanVolumes(src.Kind(), chapters)
+	if err != nil {
+		b.reply(ctx, chatID, html.EscapeString(err.Error()))
+		return
+	}
+	label := strings.TrimSpace(args[1])
+	found := false
+	for _, volume := range volumes {
+		if volume.Label == label {
+			found = true
+			break
+		}
+	}
+	if !found {
+		b.reply(ctx, chatID, fmt.Sprintf("тома %s нет, у тайтла их %d", html.EscapeString(label), len(volumes)))
+		return
+	}
+
+	b.mu.Lock()
+	b.coverWait[chatID] = coverRequest{source: src.Name(), slug: title.Slug, label: label, created: time.Now()}
+	b.mu.Unlock()
+	b.reply(ctx, chatID, fmt.Sprintf("пришли картинку для тома %s - она станет его обложкой",
+		html.EscapeString(build.VolumeTitle(label))))
+}
+
+// takeCover returns the volume waiting for a picture.
+func (b *Bot) takeCover(chatID int64) (coverRequest, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	req, ok := b.coverWait[chatID]
+	if !ok {
+		return coverRequest{}, false
+	}
+	delete(b.coverWait, chatID)
+	if time.Since(req.created) > 30*time.Minute {
+		return coverRequest{}, false
+	}
+	return req, true
+}
+
+// imageFileID returns the file of a photo or an image document.
+func imageFileID(message *telegram.Message) string {
+	if len(message.Photo) > 0 {
+		return message.Photo[len(message.Photo)-1].FileID
+	}
+	if message.Document != nil && strings.HasPrefix(message.Document.MimeType, "image/") {
+		return message.Document.FileID
+	}
+	return ""
+}
+
+// saveCover stores the picture and wires it to the volume, so the next build uses it.
+func (b *Bot) saveCover(ctx context.Context, chatID int64, req coverRequest, fileID string) {
+	body, err := b.api.Download(ctx, fileID)
+	if err != nil {
+		b.reply(ctx, chatID, "не смог скачать картинку: "+html.EscapeString(err.Error()))
+		return
+	}
+	if len(body) == 0 {
+		b.reply(ctx, chatID, "пустой файл")
+		return
+	}
+	path := b.coverPath(req.source, req.slug, req.label)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		b.reply(ctx, chatID, "ошибка: "+html.EscapeString(err.Error()))
+		return
+	}
+	if err := os.WriteFile(path, body, 0o644); err != nil {
+		b.reply(ctx, chatID, "не смог сохранить: "+html.EscapeString(err.Error()))
+		return
+	}
+	logx.Infof("обложка тома %s сохранена: %s", req.label, path)
+	b.reply(ctx, chatID, fmt.Sprintf("обложка для тома %s сохранена. Пересобери том через /add - она подставится.",
+		html.EscapeString(build.VolumeTitle(req.label))))
+}
+
+// fileExists tells whether a path points at a regular file.
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+// coverPath names the stored cover of one volume.
+func (b *Bot) coverPath(sourceName, slug, label string) string {
+	return filepath.Join(b.cfg.CoversDir, fmt.Sprintf("%s-%s-%s.img", sourceName, imgutil.Hash(slug), label))
+}
+
 // deleteTitle asks which title to forget, or confirms the one from the link.
 func (b *Bot) deleteTitle(ctx context.Context, chatID int64, args []string) {
 	if len(args) == 0 {
@@ -1518,6 +1650,14 @@ func (b *Bot) runTask(ctx context.Context, task *task) {
 		}
 	}
 
+	// Covers the user sent by hand win over whatever the source offers.
+	coverPaths := make(map[string]string)
+	for _, volume := range selected {
+		if path := b.coverPath(src.Name(), title.Slug, volume.Label); fileExists(path) {
+			coverPaths[volume.Label] = path
+		}
+	}
+
 	lastEdit := time.Now()
 	progress := func(format string, args ...any) {
 		if time.Since(lastEdit) < 3*time.Second {
@@ -1535,6 +1675,7 @@ func (b *Bot) runTask(ctx context.Context, task *task) {
 		TitleID:       titleID,
 		Volumes:       selected,
 		Covers:        covers,
+		CoverPaths:    coverPaths,
 		Dock:          b.cfg.BookDock,
 		IncludeImages: b.cfg.ImagesEnabled(),
 		WaitForDock:   false,

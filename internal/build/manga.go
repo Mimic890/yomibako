@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/Mimic890/yomibako/internal/cbz"
+	"github.com/Mimic890/yomibako/internal/imgutil"
 	"github.com/Mimic890/yomibako/internal/source"
 )
 
@@ -19,6 +20,8 @@ type VolumeOptions struct {
 	CoverURL string
 	Path     string
 	Progress func(format string, args ...any)
+	// CoverPath is a local image file used as the volume cover when the source has none.
+	CoverPath string
 	// OnChapter reports the chapter being built, so a queue can show progress inside a volume.
 	OnChapter func(done, total int)
 }
@@ -46,7 +49,18 @@ func BuildComicVolume(ctx context.Context, opts VolumeOptions) (VolumeResult, er
 	// The cover is the first page: BookOrbit takes the first image of a CBZ as the book cover, and
 	// a volume poster in front of the pages reads naturally too.
 	pages := make([]source.Image, 0, 200)
-	if opts.CoverURL != "" {
+	if opts.CoverPath != "" {
+		if body, err := os.ReadFile(opts.CoverPath); err == nil && len(body) > 0 {
+			mediaType := imgutil.Detect(body)
+			pages = append(pages, source.Image{
+				URL:       opts.CoverPath,
+				FileName:  "cover" + imgutil.Extension(mediaType),
+				MediaType: mediaType,
+				Bytes:     body,
+			})
+		}
+	}
+	if len(pages) == 0 && opts.CoverURL != "" {
 		if cover, err := opts.Source.FetchImage(ctx, opts.CoverURL); err == nil {
 			pages = append(pages, cover)
 		}

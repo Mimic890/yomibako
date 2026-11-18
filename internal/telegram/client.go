@@ -55,11 +55,19 @@ type Button struct {
 
 // Message is an incoming message.
 type Message struct {
-	MessageID int64     `json:"message_id"`
-	Text      string    `json:"text"`
-	Chat      Chat      `json:"chat"`
-	From      *User     `json:"from"`
-	Document  *Document `json:"document"`
+	MessageID int64       `json:"message_id"`
+	Text      string      `json:"text"`
+	Chat      Chat        `json:"chat"`
+	From      *User       `json:"from"`
+	Document  *Document   `json:"document"`
+	Photo     []PhotoSize `json:"photo"`
+}
+
+// PhotoSize is one size of a photo, smallest first.
+type PhotoSize struct {
+	FileID string `json:"file_id"`
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
 }
 
 // Document is a file sent to the bot.

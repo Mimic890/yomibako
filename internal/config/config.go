@@ -22,10 +22,12 @@ type Config struct {
 	Database        string   `yaml:"database"`
 	LogLevel        string   `yaml:"log_level"`
 	LibraryDir      string   `yaml:"library_dir"`
-	UserAgent       string   `yaml:"user_agent"`
-	IncludeImages   *bool    `yaml:"include_images"`
-	Auth            Auth     `yaml:"auth"`
-	Telegram        Telegram `yaml:"telegram"`
+	// CoversDir holds covers the user sends for volumes the source has none for.
+	CoversDir     string   `yaml:"covers_dir"`
+	UserAgent     string   `yaml:"user_agent"`
+	IncludeImages *bool    `yaml:"include_images"`
+	Auth          Auth     `yaml:"auth"`
+	Telegram      Telegram `yaml:"telegram"`
 }
 
 // Telegram is the bot configuration.
@@ -120,6 +122,10 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.Database == "" {
 		cfg.Database = Default().Database
+	}
+	if cfg.CoversDir == "" {
+		// Covers live next to the database: they belong to the state, not to the build.
+		cfg.CoversDir = filepath.Join(filepath.Dir(cfg.Database), "covers")
 	}
 	if cfg.LogLevel == "" {
 		cfg.LogLevel = Default().LogLevel

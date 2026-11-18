@@ -19,12 +19,14 @@ import (
 
 // Options describes one run.
 type Options struct {
-	Source        source.Source
-	Store         *store.Store
-	Title         source.Title
-	TitleID       int64
-	Volumes       []build.Volume // volumes to build, both EPUB and CBZ
-	Covers        map[string]string
+	Source  source.Source
+	Store   *store.Store
+	Title   source.Title
+	TitleID int64
+	Volumes []build.Volume // volumes to build, both EPUB and CBZ
+	Covers  map[string]string
+	// CoverPaths point at local cover files for volumes the source has no cover for.
+	CoverPaths    map[string]string
 	Dock          string
 	OutDir        string
 	IncludeImages bool
