@@ -26,7 +26,11 @@ type Options struct {
 	Volumes []build.Volume // volumes to build, both EPUB and CBZ
 	Covers  map[string]string
 	// CoverPaths point at local cover files for volumes the source has no cover for.
-	CoverPaths    map[string]string
+	CoverPaths map[string]string
+	// Layout is how the title is split into files: single, volumes or chapters.
+	Layout string
+	// Format is the file format to write: epub or cbz.
+	Format        string
 	Dock          string
 	OutDir        string
 	IncludeImages bool
@@ -50,6 +54,41 @@ type Result struct {
 	Duration time.Duration
 }
 
+// units turns the selected volumes into the units that become files: the layout decides whether a
+// volume, a chapter or the whole title is one file.
+func units(opts Options) []build.Volume {
+	switch opts.Layout {
+	case build.LayoutSingle:
+		all := make([]source.Chapter, 0, 256)
+		for _, volume := range opts.Volumes {
+			all = append(all, volume.Chapters...)
+		}
+		return []build.Volume{{Label: "single", Display: opts.Title.Title, Chapters: all}}
+	case build.LayoutChapters:
+		units := make([]build.Volume, 0, 128)
+		for _, volume := range opts.Volumes {
+			for _, chapter := range volume.Chapters {
+				units = append(units, build.Volume{
+					Label:    chapter.DisplayTitle,
+					Display:  chapter.DisplayTitle,
+					Chapters: []source.Chapter{chapter},
+				})
+			}
+		}
+		return units
+	default:
+		return opts.Volumes
+	}
+}
+
+// unitName is the file name of a unit, without the extension.
+func unitName(opts Options, volume build.Volume) string {
+	if opts.Layout == build.LayoutSingle {
+		return SafeName(opts.Title.Title)
+	}
+	return DockFileName(opts.Title.Title, build.Display(volume))
+}
+
 // Run builds everything selected, one file at a time.
 func Run(ctx context.Context, opts Options) ([]Result, error) {
 	if opts.Source.Kind() == source.KindManga {
@@ -68,13 +107,14 @@ func runNovel(ctx context.Context, opts Options) ([]Result, error) {
 		progress = func(string, ...any) {}
 	}
 
-	results := make([]Result, 0, len(opts.Volumes))
-	for _, volume := range opts.Volumes {
+	planned := units(opts)
+	results := make([]Result, 0, len(planned))
+	for _, volume := range planned {
 		if err := ctx.Err(); err != nil {
 			return results, err
 		}
 		started := time.Now()
-		logx.Infof("том %s: сборка, глав %d", build.VolumeTitle(volume.Label), len(volume.Chapters))
+		logx.Infof("%s: сборка, глав %d", build.Display(volume), len(volume.Chapters))
 
 		coverURL := opts.Covers[volume.Label]
 		if coverURL == "" {
@@ -90,17 +130,17 @@ func runNovel(ctx context.Context, opts Options) ([]Result, error) {
 			OnChapter:     opts.OnChapter,
 		})
 		if err != nil {
-			return results, fmt.Errorf("%s: %w", build.VolumeTitle(volume.Label), err)
+			return results, fmt.Errorf("%s: %w", build.Display(volume), err)
 		}
 
-		path, err := writeFile(opts, DockFileName(opts.Title.Title, build.VolumeTitle(volume.Label))+".epub", VolumeDirName(volume), "book.epub", built.Bytes)
+		path, err := writeFile(opts, unitName(opts, volume)+".epub", VolumeDirName(volume), "book.epub", built.Bytes)
 		if err != nil {
 			return results, err
 		}
 
 		imported := false
 		if opts.Dock != "" && !opts.WaitForDock {
-			logx.Infof("том %s: лежит в book-dock, ждёт подтверждения", build.VolumeTitle(volume.Label))
+			logx.Infof("%s: лежит в book-dock, ждёт подтверждения", build.Display(volume))
 		}
 		if opts.Dock != "" && opts.WaitForDock {
 			if err := WaitForDock(ctx, path); err != nil {
@@ -120,9 +160,9 @@ func runNovel(ctx context.Context, opts Options) ([]Result, error) {
 			}
 		}
 
-		logx.Infof("том %s: готово, %s, %s", build.VolumeTitle(volume.Label), humanSize(len(built.Bytes)), time.Since(started).Round(time.Second))
+		logx.Infof("%s: готово, %s, %s", build.Display(volume), humanSize(len(built.Bytes)), time.Since(started).Round(time.Second))
 		results = append(results, Result{
-			Label:    build.VolumeTitle(volume.Label),
+			Label:    build.Display(volume),
 			Chapters: len(volume.Chapters),
 			Path:     path,
 			Size:     len(built.Bytes),
@@ -131,7 +171,7 @@ func runNovel(ctx context.Context, opts Options) ([]Result, error) {
 			Duration: time.Since(started),
 		})
 		if opts.OnVolume != nil {
-			opts.OnVolume(len(results), len(opts.Volumes), results[len(results)-1])
+			opts.OnVolume(len(results), len(planned), results[len(results)-1])
 		}
 	}
 	return results, nil
@@ -147,16 +187,26 @@ func runManga(ctx context.Context, opts Options) ([]Result, error) {
 		progress = func(string, ...any) {}
 	}
 
-	results := make([]Result, 0, len(opts.Volumes))
-	for _, volume := range opts.Volumes {
+	format := opts.Format
+	if format == "" {
+		format = build.FormatCBZ
+	}
+	planned := units(opts)
+	results := make([]Result, 0, len(planned))
+	for _, volume := range planned {
 		if err := ctx.Err(); err != nil {
 			return results, err
 		}
 		started := time.Now()
-		label := build.VolumeTitle(volume.Label)
+		label := build.Display(volume)
 		logx.Infof("%s: сборка, глав %d", label, len(volume.Chapters))
 
-		path, err := targetPath(opts, DockFileName(opts.Title.Title, label)+".cbz", VolumeDirName(volume), "book.cbz")
+		dirName := VolumeDirName(volume)
+		if opts.Layout == build.LayoutSingle {
+			// One file for the whole title: the folder repeats the title otherwise.
+			dirName = "single"
+		}
+		path, err := targetPath(opts, unitName(opts, volume)+"."+format, dirName, "book."+format)
 		if err != nil {
 			return results, err
 		}
@@ -167,6 +217,7 @@ func runManga(ctx context.Context, opts Options) ([]Result, error) {
 			CoverURL:  opts.Covers[volume.Label],
 			Path:      path,
 			Progress:  progress,
+			Format:    format,
 			OnChapter: opts.OnChapter,
 		})
 		if err != nil {
@@ -189,7 +240,7 @@ func runManga(ctx context.Context, opts Options) ([]Result, error) {
 				Label:    volume.Label,
 				Number:   volume.Number,
 				Chapters: len(volume.Chapters),
-				Format:   "cbz",
+				Format:   format,
 			}, path, int(built.Size), imported); err != nil {
 				return results, err
 			}
@@ -206,7 +257,7 @@ func runManga(ctx context.Context, opts Options) ([]Result, error) {
 			Duration: time.Since(started),
 		})
 		if opts.OnVolume != nil {
-			opts.OnVolume(len(results), len(opts.Volumes), results[len(results)-1])
+			opts.OnVolume(len(results), len(planned), results[len(results)-1])
 		}
 	}
 	return results, nil
@@ -290,6 +341,9 @@ func ChapterLabel(chapter source.Chapter) string {
 
 // VolumeDirName is the folder name of a volume in the output directory.
 func VolumeDirName(volume build.Volume) string {
+	if volume.Display != "" {
+		return SafeName(volume.Display)
+	}
 	if volume.Number > 0 {
 		return fmt.Sprintf("Том %02d", volume.Number)
 	}

@@ -266,6 +266,8 @@ func runAdd(args []string) error {
 	volumeList := fs.String("volume", "", "номера томов через запятую")
 	all := fs.Bool("all", false, "все тома или главы")
 	limit := fs.Int("limit", 0, "ограничить число глав в томе")
+	layout := fs.String("layout", build.LayoutVolumes, "раскладка: single, volumes или chapters")
+	fileFormat := fs.String("format", "", "формат файла: epub или cbz")
 	if err := fs.Parse(reorderArgs(args)); err != nil {
 		return err
 	}
@@ -343,6 +345,8 @@ func runAdd(args []string) error {
 
 	results, err := pipeline.Run(ctx, pipeline.Options{
 		Source:        src,
+		Layout:        *layout,
+		Format:        *fileFormat,
 		Store:         st,
 		Title:         title,
 		TitleID:       titleID,

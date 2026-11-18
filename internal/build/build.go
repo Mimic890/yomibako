@@ -18,6 +18,9 @@ type Volume struct {
 	Label    string
 	Number   int
 	Chapters []source.Chapter
+	// Display overrides the file and heading name when a unit is not a plain volume: a whole title
+	// in one file, or a single chapter.
+	Display string
 }
 
 // GroupVolumes splits chapters by the source's own volume label. Chapters without a volume go into
@@ -105,6 +108,56 @@ func PlanVolumes(kind source.Kind, chapters []source.Chapter) ([]Volume, error) 
 	return ChunkVolumes(chapters, 10), nil
 }
 
+// Storage layouts: how a title is split into files.
+const (
+	// LayoutSingle puts the whole title into one file.
+	LayoutSingle = "single"
+	// LayoutVolumes writes one file per volume.
+	LayoutVolumes = "volumes"
+	// LayoutChapters writes one file per chapter.
+	LayoutChapters = "chapters"
+)
+
+// File formats a title can be stored in.
+const (
+	FormatCBZ  = "cbz"
+	FormatEPUB = "epub"
+)
+
+// Layouts lists every storage layout in the order the bot offers them.
+var Layouts = []string{LayoutSingle, LayoutVolumes, LayoutChapters}
+
+// LayoutTitle is the human-readable name of a layout.
+func LayoutTitle(layout string) string {
+	switch layout {
+	case LayoutSingle:
+		return "один файл"
+	case LayoutChapters:
+		return "по главам"
+	default:
+		return "по томам"
+	}
+}
+
+// FormatTitle is the file extension shown to the user.
+func FormatTitle(format string) string {
+	switch format {
+	case FormatCBZ:
+		return "CBZ"
+	default:
+		return "EPUB"
+	}
+}
+
+// Formats lists the formats a source kind can be stored in. A novel needs a text container, so it
+// has only EPUB; a comic reads fine as either.
+func Formats(kind source.Kind) []string {
+	if kind == source.KindManga {
+		return []string{FormatCBZ, FormatEPUB}
+	}
+	return []string{FormatEPUB}
+}
+
 // Variants counts every translation variant of every chapter, which is the number a reader that
 // lists each variant shows.
 func Variants(chapters []source.Chapter) int {
@@ -125,6 +178,14 @@ func VolumeTitle(label string) string {
 		return "Без тома"
 	}
 	return "Том " + label
+}
+
+// Display is the name a unit is written and titled with.
+func Display(volume Volume) string {
+	if volume.Display != "" {
+		return volume.Display
+	}
+	return VolumeTitle(volume.Label)
 }
 
 // Options controls one volume build.
@@ -191,7 +252,7 @@ func BuildVolume(ctx context.Context, opts Options) (Result, error) {
 	}
 
 	if len(chapters) == 0 {
-		return Result{}, fmt.Errorf("volume %s: no chapters could be downloaded", VolumeTitle(opts.Volume.Label))
+		return Result{}, fmt.Errorf("volume %s: no chapters could be downloaded", Display(opts.Volume))
 	}
 
 	var cover *epub.Image

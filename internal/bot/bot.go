@@ -71,6 +71,7 @@ type deleteTarget struct {
 // pick is a slug waiting for the user to say which site it belongs to.
 type pick struct {
 	slug    string
+	force   bool
 	created time.Time
 }
 
@@ -82,7 +83,13 @@ type pendingJob struct {
 	volumes  []string
 	chapters []string
 	all      bool
-	created  time.Time
+	// Layout and format are chosen by the user and are what the build follows.
+	layout string
+	format string
+	force  bool
+	// title is the human-readable name shown on the last screen.
+	title   string
+	created time.Time
 }
 
 // task is one build: it waits in the queue, then runs on its own source's worker. Titles of
@@ -97,6 +104,9 @@ type task struct {
 	volumes   string
 	chapters  []string
 	all       bool
+	layout    string
+	format    string
+	force     bool
 
 	title    string
 	status   string
@@ -289,7 +299,9 @@ func (b *Bot) handle(ctx context.Context, message *telegram.Message) {
 	case "cookie_clear", "cookie-clear":
 		b.clearCookies(ctx, message.Chat.ID)
 	case "add":
-		b.add(ctx, message.Chat.ID, args)
+		b.add(ctx, message.Chat.ID, args, false)
+	case "convert":
+		b.add(ctx, message.Chat.ID, args, true)
 	default:
 		b.reply(ctx, message.Chat.ID, "не знаю такую команду. /help")
 	}
@@ -390,6 +402,13 @@ func (b *Bot) list(ctx context.Context, chatID int64) {
 			chaptersLabel += fmt.Sprintf(" (%d с переводами)", variants)
 		}
 
+		// The storage layout is part of what a title is: a rebuild follows it, and it explains why
+		// one title has 38 files and another has one.
+		storage := build.LayoutTitle(title.Layout)
+		if title.Format != "" {
+			storage += " · " + build.FormatTitle(title.Format)
+		}
+
 		link := map[string]any{"type": "url", "url": title.SourceURL, "text": title.Title}
 		text := []any{
 			link,
@@ -397,13 +416,16 @@ func (b *Bot) list(ctx context.Context, chatID int64) {
 			fmt.Sprintf("%d/%d %s", ready, totalUnits, unitName),
 			" · ",
 			chaptersLabel,
+			" · ",
+			storage,
 		}
 		items = append(items, map[string]any{
 			"blocks": []any{map[string]any{"type": "paragraph", "text": text}},
 		})
 
-		fmt.Fprintf(&fallback, `<a href="%s">%s</a> · %d/%d %s · %s`+"\n",
-			html.EscapeString(title.SourceURL), html.EscapeString(title.Title), ready, totalUnits, unitName, html.EscapeString(chaptersLabel))
+		fmt.Fprintf(&fallback, `<a href="%s">%s</a> · %d/%d %s · %s · %s`+"\n",
+			html.EscapeString(title.SourceURL), html.EscapeString(title.Title), ready, totalUnits, unitName,
+			html.EscapeString(chaptersLabel), html.EscapeString(storage))
 	}
 
 	blocks := []map[string]any{{"type": "list", "items": items}}
@@ -675,7 +697,7 @@ func (b *Bot) cookieSummary(jar cookies.Jar, header string) string {
 	return out.String()
 }
 
-func (b *Bot) add(ctx context.Context, chatID int64, args []string) {
+func (b *Bot) add(ctx context.Context, chatID int64, args []string, force bool) {
 	if len(args) == 0 {
 		b.reply(ctx, chatID, "нужна ссылка на тайтл: /add &lt;ссылка&gt;")
 		return
@@ -689,20 +711,20 @@ func (b *Bot) add(ctx context.Context, chatID int64, args []string) {
 	src, slug, err := b.registry.Resolve(link)
 	if errors.Is(err, sources.ErrNotURL) {
 		// Not a link: the user typed a slug, so ask which site it belongs to.
-		b.askSource(ctx, chatID, link)
+		b.askSource(ctx, chatID, link, force)
 		return
 	}
 	if err != nil {
 		b.reply(ctx, chatID, html.EscapeString(err.Error()))
 		return
 	}
-	b.showUnits(ctx, chatID, src, slug)
+	b.showUnits(ctx, chatID, src, slug, force)
 }
 
 // askSource turns a bare slug into a question: the same slug may exist on several sites, and only
 // the user knows which one was meant.
-func (b *Bot) askSource(ctx context.Context, chatID int64, slug string) {
-	token := b.rememberPick(slug)
+func (b *Bot) askSource(ctx context.Context, chatID int64, slug string, force bool) {
+	token := b.rememberPick(slug, force)
 	rows := make([][]telegram.Button, 0, 5)
 	for _, src := range b.registry.All() {
 		rows = append(rows, []telegram.Button{{
@@ -714,13 +736,26 @@ func (b *Bot) askSource(ctx context.Context, chatID int64, slug string) {
 	b.flowMessage(ctx, chatID, text, rows)
 }
 
-// showUnits lists the volumes of a title. Manga is built one CBZ per volume too: BookOrbit makes
-// one book out of one file, so a chapter-per-file run would land as a pile of separate titles.
-func (b *Bot) showUnits(ctx context.Context, chatID int64, src source.Source, slug string) {
-	b.showVolumes(ctx, chatID, src, slug)
+// showUnits asks how the title should be stored: the layout decides whether one file, one file per
+// volume or one file per chapter ends up in the dock.
+func (b *Bot) showUnits(ctx context.Context, chatID int64, src source.Source, slug string, force bool) {
+	title, err := src.Title(ctx, slug)
+	if err != nil {
+		b.reply(ctx, chatID, "не нашёл: "+html.EscapeString(err.Error()))
+		return
+	}
+	token := b.rememberPick(title.Slug, force)
+	name := src.Name()
+	rows := [][]telegram.Button{
+		{{Text: "Один файл", Data: "lo:" + name + ":" + build.LayoutSingle + ":" + token}},
+		{{Text: "По томам", Data: "lo:" + name + ":" + build.LayoutVolumes + ":" + token}},
+		{{Text: "По главам", Data: "lo:" + name + ":" + build.LayoutChapters + ":" + token}},
+	}
+	text := fmt.Sprintf("<b>%s</b>\nкак сохранить?", html.EscapeString(title.Title))
+	b.flowMessage(ctx, chatID, text, rows)
 }
 
-func (b *Bot) showVolumes(ctx context.Context, chatID int64, src source.Source, slug string) {
+func (b *Bot) showVolumes(ctx context.Context, chatID int64, src source.Source, slug string, force bool) {
 	title, err := src.Title(ctx, slug)
 	if err != nil {
 		b.reply(ctx, chatID, "не нашёл: "+html.EscapeString(err.Error()))
@@ -763,17 +798,17 @@ func (b *Bot) showVolumes(ctx context.Context, chatID int64, src source.Source, 
 	}
 
 	logx.Infof("%s: %d глав, %d томов", title.Slug, len(chapters), len(volumes))
-	rows := b.volumeButtons(src.Name(), title.Slug, volumes, known)
+	rows := b.volumeButtons(src.Name(), title.Slug, volumes, known, force)
 
 	text := fmt.Sprintf("<b>%s</b>\nтомов: %d, глав: %d\n\nвыбери том:", html.EscapeString(title.Title), len(volumes), len(chapters))
 	b.flowMessage(ctx, chatID, text, rows)
 }
 
 // volumeButtons lays out one button per volume, four per row, plus an "all" button.
-func (b *Bot) volumeButtons(sourceName, slug string, volumes []build.Volume, known map[string]string) [][]telegram.Button {
+func (b *Bot) volumeButtons(sourceName, slug string, volumes []build.Volume, known map[string]string, force bool) [][]telegram.Button {
 	// Telegram caps callback data at 64 bytes and a com-x slug alone can pass a hundred, so the
 	// buttons carry a short token instead of the slug.
-	token := b.rememberPick(slug)
+	token := b.rememberPick(slug, force)
 	var rows [][]telegram.Button
 	var row []telegram.Button
 	for _, volume := range volumes {
@@ -806,24 +841,24 @@ func (b *Bot) handleCallback(ctx context.Context, query *telegram.CallbackQuery)
 	case "t":
 		if len(parts) == 3 {
 			if src, ok := b.registry.ByName(parts[1]); ok {
-				if slug, ok := b.peekPick(parts[2]); ok {
-					b.showUnits(ctx, chatID, src, slug)
+				if item, ok := b.peekPick(parts[2]); ok {
+					b.showUnits(ctx, chatID, src, item.slug, item.force)
 				}
 			}
 		}
 	case "v":
 		if len(parts) == 4 {
 			if src, ok := b.registry.ByName(parts[1]); ok {
-				if slug, ok := b.peekPick(parts[2]); ok {
-					b.confirm(ctx, chatID, src, slug, []string{parts[3]}, false)
+				if item, ok := b.peekPick(parts[2]); ok {
+					b.confirm(ctx, chatID, src, item.slug, []string{parts[3]}, false, item.force)
 				}
 			}
 		}
 	case "a":
 		if len(parts) == 3 {
 			if src, ok := b.registry.ByName(parts[1]); ok {
-				if slug, ok := b.peekPick(parts[2]); ok {
-					b.confirm(ctx, chatID, src, slug, nil, true)
+				if item, ok := b.peekPick(parts[2]); ok {
+					b.confirm(ctx, chatID, src, item.slug, nil, true, item.force)
 				}
 			}
 		}
@@ -850,13 +885,48 @@ func (b *Bot) handleCallback(ctx context.Context, query *telegram.CallbackQuery)
 		}
 	case "s":
 		if len(parts) == 3 {
-			slug, ok := b.takePick(parts[2])
+			item, ok := b.takePick(parts[2])
 			if !ok {
 				b.reply(ctx, chatID, "выбор устарел, пришли ссылку заново")
 				return
 			}
 			if src, found := b.registry.ByName(parts[1]); found {
-				b.showUnits(ctx, chatID, src, slug)
+				b.showUnits(ctx, chatID, src, item.slug, item.force)
+			}
+		}
+	case "lo":
+		if len(parts) == 4 {
+			if src, found := b.registry.ByName(parts[1]); found {
+				if item, ok := b.peekPick(parts[3]); ok {
+					b.chooseLayout(ctx, chatID, src, item.slug, parts[2], item.force)
+				}
+			}
+		}
+	case "fm":
+		if len(parts) == 3 {
+			b.mu.Lock()
+			job, ok := b.pending[parts[2]]
+			if ok {
+				job.format = parts[1]
+				b.pending[parts[2]] = job
+			}
+			b.mu.Unlock()
+			if ok {
+				b.showConfirm(ctx, chatID, parts[2])
+			}
+		}
+	case "fmback":
+		if len(parts) == 2 {
+			b.mu.Lock()
+			job, ok := b.pending[parts[1]]
+			b.mu.Unlock()
+			if !ok {
+				b.reply(ctx, chatID, "подтверждение устарело, начни заново")
+				return
+			}
+			if src, found := b.registry.ByName(job.source); found {
+				back := b.rememberPick(job.slug, job.force)
+				b.flowMessage(ctx, chatID, "в каком формате?", b.formatRows(src.Kind(), parts[1], "t:"+src.Name()+":"+back))
 			}
 		}
 	case "go":
@@ -867,7 +937,7 @@ func (b *Bot) handleCallback(ctx context.Context, query *telegram.CallbackQuery)
 }
 
 // confirm shows what is about to be downloaded and waits for a button press.
-func (b *Bot) confirm(ctx context.Context, chatID int64, src source.Source, slug string, units []string, all bool) {
+func (b *Bot) confirm(ctx context.Context, chatID int64, src source.Source, slug string, units []string, all bool, force bool) {
 	title, err := src.Title(ctx, slug)
 	if err != nil {
 		b.reply(ctx, chatID, "не нашёл: "+html.EscapeString(err.Error()))
@@ -896,7 +966,7 @@ func (b *Bot) confirm(ctx context.Context, chatID int64, src source.Source, slug
 		Kind:          string(src.Kind()),
 	})
 	present := map[string]bool{}
-	if labels, err := b.st.VolumeLabels(ctx, titleID); err == nil {
+	if labels, err := b.st.VolumeLabels(ctx, titleID); err == nil && !force {
 		for label, status := range labels {
 			if status != store.StatusMissing {
 				present[label] = true
@@ -949,15 +1019,101 @@ func (b *Bot) confirm(ctx context.Context, chatID int64, src source.Source, slug
 	for _, group := range selected {
 		labels = append(labels, group.Label)
 	}
-	token := b.remember(pendingJob{source: src.Name(), slug: title.Slug, volumes: labels, all: all, created: time.Now()})
+	token := b.remember(pendingJob{
+		source:  src.Name(),
+		slug:    title.Slug,
+		volumes: labels,
+		all:     all,
+		layout:  build.LayoutVolumes,
+		force:   force,
+		title:   title.Title,
+		created: time.Now(),
+	})
 	// The back button cannot carry the slug: Telegram limits callback data to 64 bytes.
-	back := b.rememberPick(title.Slug)
+	back := b.rememberPick(title.Slug, force)
 
+	out.WriteString("\n\nв каком формате?")
+	b.flowMessage(ctx, chatID, out.String(), b.formatRows(src.Kind(), token, "t:"+src.Name()+":"+back))
+}
+
+// chooseLayout builds the plan for a layout that does not need a volume choice: the whole title in
+// one file, or one file per chapter.
+func (b *Bot) chooseLayout(ctx context.Context, chatID int64, src source.Source, slug, layout string, force bool) {
+	if layout == build.LayoutVolumes {
+		b.showVolumes(ctx, chatID, src, slug, force)
+		return
+	}
+	title, err := src.Title(ctx, slug)
+	if err != nil {
+		b.reply(ctx, chatID, "не нашёл: "+html.EscapeString(err.Error()))
+		return
+	}
+	chapters, err := src.Chapters(ctx, title.Slug)
+	if err != nil {
+		b.reply(ctx, chatID, "ошибка: "+html.EscapeString(err.Error()))
+		return
+	}
+	groups, err := build.PlanVolumes(src.Kind(), chapters)
+	if err != nil {
+		b.reply(ctx, chatID, html.EscapeString(err.Error()))
+		return
+	}
+
+	labels := make([]string, 0, len(groups))
+	for _, group := range groups {
+		labels = append(labels, group.Label)
+	}
+	token := b.remember(pendingJob{
+		source:  src.Name(),
+		slug:    title.Slug,
+		volumes: labels,
+		all:     true,
+		layout:  layout,
+		force:   force,
+		title:   title.Title,
+		created: time.Now(),
+	})
+
+	var out strings.Builder
+	fmt.Fprintf(&out, "<b>%s</b>\n", html.EscapeString(title.Title))
+	switch layout {
+	case build.LayoutSingle:
+		fmt.Fprintf(&out, "один файл · глав: %d\n", len(chapters))
+	default:
+		fmt.Fprintf(&out, "по главам · файлов: %d\n", len(chapters))
+	}
+	out.WriteString("\nв каком формате?")
+
+	back := b.rememberPick(title.Slug, force)
+	b.flowMessage(ctx, chatID, out.String(), b.formatRows(src.Kind(), token, "t:"+src.Name()+":"+back))
+}
+
+// formatRows offers the formats a source kind can be written in.
+func (b *Bot) formatRows(kind source.Kind, token, backData string) [][]telegram.Button {
+	rows := make([][]telegram.Button, 0, 3)
+	for _, format := range build.Formats(kind) {
+		rows = append(rows, []telegram.Button{{Text: build.FormatTitle(format), Data: "fm:" + format + ":" + token}})
+	}
+	return append(rows, []telegram.Button{{Text: "Назад", Data: backData}})
+}
+
+// showConfirm is the last screen: what will be built, in which layout and format.
+func (b *Bot) showConfirm(ctx context.Context, chatID int64, token string) {
+	b.mu.Lock()
+	job, ok := b.pending[token]
+	b.mu.Unlock()
+	if !ok {
+		b.reply(ctx, chatID, "подтверждение устарело, начни заново")
+		return
+	}
+
+	text := fmt.Sprintf("<b>%s</b>\n%s · %s\n\nскачать?",
+		html.EscapeString(job.title), build.LayoutTitle(job.layout), build.FormatTitle(job.format))
 	rows := [][]telegram.Button{
 		{{Text: "Подтвердить", Data: "go:" + token}},
-		{{Text: "Назад", Data: "t:" + src.Name() + ":" + back}},
+		{{Text: "Другой формат", Data: "fmback:" + token}},
 	}
-	b.flowMessage(ctx, chatID, out.String(), rows)
+	b.flowMessage(ctx, chatID, text, rows)
 }
 
 // randomToken returns a short unguessable token for a pending confirmation.
@@ -985,7 +1141,7 @@ func (b *Bot) remember(job pendingJob) string {
 }
 
 // rememberPick stores a slug and returns a token for the source buttons.
-func (b *Bot) rememberPick(slug string) string {
+func (b *Bot) rememberPick(slug string, force bool) string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for token, item := range b.picks {
@@ -994,32 +1150,32 @@ func (b *Bot) rememberPick(slug string) string {
 		}
 	}
 	token := randomToken()
-	b.picks[token] = pick{slug: slug, created: time.Now()}
+	b.picks[token] = pick{slug: slug, force: force, created: time.Now()}
 	return token
 }
 
 // peekPick returns the slug behind a token without consuming it: the volume buttons of one title
 // are pressed more than once.
-func (b *Bot) peekPick(token string) (string, bool) {
+func (b *Bot) peekPick(token string) (pick, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	item, ok := b.picks[token]
 	if !ok || time.Since(item.created) > 10*time.Minute {
-		return "", false
+		return pick{}, false
 	}
-	return item.slug, true
+	return item, true
 }
 
 // takePick returns the slug behind a token and forgets it.
-func (b *Bot) takePick(token string) (string, bool) {
+func (b *Bot) takePick(token string) (pick, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	item, ok := b.picks[token]
 	delete(b.picks, token)
 	if !ok || time.Since(item.created) > 10*time.Minute {
-		return "", false
+		return pick{}, false
 	}
-	return item.slug, true
+	return item, true
 }
 
 // startPending enqueues a confirmed job.
@@ -1037,7 +1193,15 @@ func (b *Bot) startPending(ctx context.Context, chatID int64, token string) {
 		b.enqueueChapters(ctx, chatID, item.source, item.slug, item.chapters)
 		return
 	}
-	b.enqueue(ctx, chatID, item.source, item.slug, strings.Join(item.volumes, ","), false)
+	b.addTask(ctx, chatID, &task{
+		source:  item.source,
+		slug:    item.slug,
+		volumes: strings.Join(item.volumes, ","),
+		all:     item.all,
+		layout:  item.layout,
+		format:  item.format,
+		force:   item.force,
+	})
 }
 
 // enqueue puts a build job on the queue and reports it in the chat.
@@ -1620,9 +1784,30 @@ func (b *Bot) runTask(ctx context.Context, task *task) {
 	for _, volume := range selected {
 		chaptersInPlan += len(volume.Chapters)
 	}
+
+	layout := task.layout
+	if layout == "" {
+		layout = build.LayoutVolumes
+	}
+	format := task.format
+	if format == "" {
+		format = build.FormatEPUB
+		if src.Kind() == source.KindManga {
+			format = build.FormatCBZ
+		}
+	}
+	// One file per chapter is one file per chapter, whatever the volumes say.
+	unitCount := len(selected)
+	switch layout {
+	case build.LayoutSingle:
+		unitCount = 1
+	case build.LayoutChapters:
+		unitCount = chaptersInPlan
+	}
+
 	b.mu.Lock()
 	task.title = title.Title
-	task.volTotal = len(selected)
+	task.volTotal = unitCount
 	task.chTotal = chaptersInPlan
 	b.mu.Unlock()
 
@@ -1641,6 +1826,9 @@ func (b *Bot) runTask(ctx context.Context, task *task) {
 	if err != nil {
 		edit("ошибка базы: " + html.EscapeString(err.Error()))
 		return
+	}
+	if err := b.st.SetLayout(ctx, titleID, layout, format); err != nil {
+		logx.Warnf("не смог записать формат хранения: %v", err)
 	}
 
 	covers := map[string]string{}
@@ -1674,6 +1862,8 @@ func (b *Bot) runTask(ctx context.Context, task *task) {
 		Title:         title,
 		TitleID:       titleID,
 		Volumes:       selected,
+		Layout:        layout,
+		Format:        format,
 		Covers:        covers,
 		CoverPaths:    coverPaths,
 		Dock:          b.cfg.BookDock,
@@ -1694,6 +1884,23 @@ func (b *Bot) runTask(ctx context.Context, task *task) {
 			b.mu.Unlock()
 		},
 	})
+
+	// A conversion replaces the old set of files: whatever the previous layout left behind is gone,
+	// so the dock does not hold two copies of the same title.
+	if task.force && err == nil {
+		paths := make([]string, 0, len(results))
+		for _, result := range results {
+			paths = append(paths, result.Path)
+		}
+		if removed, pruneErr := b.st.PruneVolumes(ctx, titleID, paths); pruneErr == nil {
+			for _, path := range removed {
+				if b.cfg.BookDock != "" && strings.HasPrefix(path, b.cfg.BookDock+"/") {
+					_ = os.Remove(path)
+				}
+			}
+			logx.Infof("«%s»: убрано файлов прошлой раскладки: %d", title.Title, len(removed))
+		}
+	}
 
 	var out strings.Builder
 	fmt.Fprintf(&out, "<b>%s</b>\n", html.EscapeString(title.Title))

@@ -93,7 +93,7 @@ func TestVolumeButtons(t *testing.T) {
 		{Label: "5", Number: 5},
 	}
 	bot := &Bot{picks: map[string]pick{}}
-	rows := bot.volumeButtons("ranobelib", "1--x", volumes, map[string]string{"2": "imported"})
+	rows := bot.volumeButtons("ranobelib", "1--x", volumes, map[string]string{"2": "imported"}, false)
 
 	if len(rows) != 3 {
 		t.Fatalf("expected 3 rows, got %d", len(rows))
@@ -112,7 +112,7 @@ func TestVolumeButtons(t *testing.T) {
 	if len(parts) != 4 || parts[0] != "v" || parts[1] != "ranobelib" || parts[3] != "1" {
 		t.Errorf("unexpected callback data: %q", rows[0][0].Data)
 	}
-	if slug, ok := bot.peekPick(parts[2]); !ok || slug != "1--x" {
+	if item, ok := bot.peekPick(parts[2]); !ok || item.slug != "1--x" {
 		t.Errorf("token does not lead back to the slug: %q", parts[2])
 	}
 	if rows[2][0].Data != "a:ranobelib:"+parts[2] {

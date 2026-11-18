@@ -39,7 +39,11 @@ type Title struct {
 	TotalVolumes  int
 	Kind          string
 	// Status is the source's own state of the title: ongoing, completed or unknown.
-	Status       string
+	Status string
+	// Layout is how the title is stored: one file, per volume or per chapter.
+	Layout string
+	// Format is the file format the title is stored in: epub or cbz.
+	Format       string
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 	Volumes      []Volume
@@ -177,6 +181,8 @@ func (s *Store) migrate() error {
 	for _, statement := range []string{
 		`ALTER TABLE titles ADD COLUMN kind TEXT NOT NULL DEFAULT 'novel'`,
 		`ALTER TABLE titles ADD COLUMN status TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE titles ADD COLUMN layout TEXT NOT NULL DEFAULT 'volumes'`,
+		`ALTER TABLE titles ADD COLUMN format TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE volumes ADD COLUMN format TEXT NOT NULL DEFAULT 'epub'`,
 	} {
 		if _, err := s.db.Exec(statement); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
@@ -237,6 +243,56 @@ func (s *Store) UpsertTitle(ctx context.Context, title Title) (int64, error) {
 	var id int64
 	err = s.db.QueryRowContext(ctx, `SELECT id FROM titles WHERE source = ? AND slug = ?`, title.Source, title.Slug).Scan(&id)
 	return id, err
+}
+
+// SetLayout remembers how a title is stored, which is what a rebuild follows.
+func (s *Store) SetLayout(ctx context.Context, titleID int64, layout, format string) error {
+	if layout == "" {
+		layout = "volumes"
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE titles SET layout = ?, format = ?, updated_at = ? WHERE id = ?`,
+		layout, format, now(), titleID)
+	return err
+}
+
+// PruneVolumes forgets every file of a title that is not in keep, and returns the paths it dropped so
+// the caller can delete them.
+func (s *Store) PruneVolumes(ctx context.Context, titleID int64, keep []string) ([]string, error) {
+	kept := make(map[string]bool, len(keep))
+	for _, path := range keep {
+		kept[path] = true
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id, file_path FROM volumes WHERE title_id = ?`, titleID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var removedIDs []int64
+	var paths []string
+	for rows.Next() {
+		var id int64
+		var path string
+		if err := rows.Scan(&id, &path); err != nil {
+			return nil, err
+		}
+		if kept[path] {
+			continue
+		}
+		removedIDs = append(removedIDs, id)
+		if path != "" {
+			paths = append(paths, path)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, id := range removedIDs {
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM volumes WHERE id = ?`, id); err != nil {
+			return nil, err
+		}
+	}
+	return paths, nil
 }
 
 // RecordVolume stores the result of a build. Rebuilding the same volume updates the row instead of
@@ -310,7 +366,7 @@ func (s *Store) VolumeLabels(ctx context.Context, titleID int64) (map[string]str
 // Titles returns every tracked title with its volumes and subscription.
 func (s *Store) Titles(ctx context.Context) ([]Title, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, source, slug, title, authors, cover_url, source_url, total_chapters, total_volumes, kind, status, created_at, updated_at
+		SELECT id, source, slug, title, authors, cover_url, source_url, total_chapters, total_volumes, kind, status, layout, format, created_at, updated_at
 		FROM titles ORDER BY title COLLATE NOCASE`)
 	if err != nil {
 		return nil, err
@@ -327,7 +383,7 @@ func (s *Store) Titles(ctx context.Context) ([]Title, error) {
 		)
 		if err := rows.Scan(&title.ID, &title.Source, &title.Slug, &title.Title, &authors,
 			&title.CoverURL, &title.SourceURL, &title.TotalChapters, &title.TotalVolumes, &title.Kind,
-			&title.Status, &created, &updated); err != nil {
+			&title.Status, &title.Layout, &title.Format, &created, &updated); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(authors), &title.Authors)
