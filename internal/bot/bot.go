@@ -1267,8 +1267,13 @@ func (b *Bot) deleteTitle(ctx context.Context, chatID int64, args []string) {
 		rows := make([][]telegram.Button, 0, len(titles))
 		for _, title := range titles {
 			token := b.rememberDelete(title.ID, title.Title)
+			// One work can live on two sites, so the button names the source as well.
+			label := fmt.Sprintf("%s · %s", title.Title, b.sourceLabel(title.Source))
+			if len([]rune(label)) > 60 {
+				label = string([]rune(label)[:59]) + "…"
+			}
 			rows = append(rows, []telegram.Button{{
-				Text: title.Title,
+				Text: label,
 				Data: "del:" + token,
 			}})
 		}
