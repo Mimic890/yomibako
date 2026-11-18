@@ -32,6 +32,8 @@ type Options struct {
 	Progress      func(format string, args ...any)
 	// OnVolume reports a finished file, so a queue can show how far a title has got.
 	OnVolume func(done, total int, result Result)
+	// OnChapter reports the chapter being built inside the current volume.
+	OnChapter func(done, total int)
 }
 
 // Result is one written file.
@@ -83,6 +85,7 @@ func runNovel(ctx context.Context, opts Options) ([]Result, error) {
 			CoverURL:      coverURL,
 			IncludeImages: opts.IncludeImages,
 			Progress:      progress,
+			OnChapter:     opts.OnChapter,
 		})
 		if err != nil {
 			return results, fmt.Errorf("%s: %w", build.VolumeTitle(volume.Label), err)
@@ -156,12 +159,13 @@ func runManga(ctx context.Context, opts Options) ([]Result, error) {
 			return results, err
 		}
 		built, err := build.BuildComicVolume(ctx, build.VolumeOptions{
-			Source:   manga,
-			Title:    opts.Title,
-			Volume:   volume,
-			CoverURL: opts.Covers[volume.Label],
-			Path:     path,
-			Progress: progress,
+			Source:    manga,
+			Title:     opts.Title,
+			Volume:    volume,
+			CoverURL:  opts.Covers[volume.Label],
+			Path:      path,
+			Progress:  progress,
+			OnChapter: opts.OnChapter,
 		})
 		if err != nil {
 			return results, fmt.Errorf("%s: %w", label, err)

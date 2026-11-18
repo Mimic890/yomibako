@@ -135,6 +135,8 @@ type Options struct {
 	CoverURL      string
 	IncludeImages bool
 	Progress      func(format string, args ...any)
+	// OnChapter reports the chapter being built, so a queue can show progress inside a volume.
+	OnChapter func(done, total int)
 }
 
 // Result is a built volume.
@@ -160,6 +162,9 @@ func BuildVolume(ctx context.Context, opts Options) (Result, error) {
 			return Result{}, err
 		}
 		progress("[%d/%d] %s", i+1, len(opts.Volume.Chapters), chapter.DisplayTitle)
+		if opts.OnChapter != nil {
+			opts.OnChapter(i+1, len(opts.Volume.Chapters))
+		}
 
 		content, err := opts.Source.Chapter(ctx, opts.Title.Slug, chapter)
 		if err != nil {

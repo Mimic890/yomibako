@@ -94,6 +94,7 @@ type task struct {
 	volTotal int
 	chDone   int
 	chTotal  int
+	chBase   int
 	created  time.Time
 	started  time.Time
 	ended    time.Time
@@ -1259,7 +1260,7 @@ func (b *Bot) watchQueue(ctx context.Context, chatID, messageID int64) {
 			b.mu.Unlock()
 		}()
 
-		ticker := time.NewTicker(10 * time.Second)
+		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
@@ -1608,6 +1609,12 @@ func (b *Bot) runTask(ctx context.Context, task *task) {
 			b.mu.Lock()
 			task.volDone = done
 			task.chDone += result.Chapters
+			task.chBase = task.chDone
+			b.mu.Unlock()
+		},
+		OnChapter: func(done, total int) {
+			b.mu.Lock()
+			task.chDone = task.chBase + done
 			b.mu.Unlock()
 		},
 	})

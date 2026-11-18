@@ -19,6 +19,8 @@ type VolumeOptions struct {
 	CoverURL string
 	Path     string
 	Progress func(format string, args ...any)
+	// OnChapter reports the chapter being built, so a queue can show progress inside a volume.
+	OnChapter func(done, total int)
 }
 
 // VolumeResult is a written CBZ.
@@ -50,11 +52,14 @@ func BuildComicVolume(ctx context.Context, opts VolumeOptions) (VolumeResult, er
 		}
 	}
 
-	for _, chapter := range opts.Volume.Chapters {
+	for index, chapter := range opts.Volume.Chapters {
 		if err := ctx.Err(); err != nil {
 			return VolumeResult{}, err
 		}
 		progress("%s: %s", VolumeTitle(opts.Volume.Label), chapter.DisplayTitle)
+		if opts.OnChapter != nil {
+			opts.OnChapter(index+1, len(opts.Volume.Chapters))
+		}
 		chapterPages, err := opts.Source.Pages(ctx, opts.Title.Slug, chapter)
 		if err != nil {
 			return VolumeResult{}, fmt.Errorf("%s: %w", chapter.DisplayTitle, err)
