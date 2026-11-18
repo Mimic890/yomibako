@@ -38,16 +38,16 @@ type Options struct {
 	SkipCompleted bool
 }
 
-// Run checks every subscription. Subscriptions are the titles the user asked to keep an eye on;
-// there is no timer anywhere, this only runs when the command is typed.
+// Run checks every title in the database: there are no subscriptions and no timer, the command
+// checks whatever is tracked.
 func Run(ctx context.Context, st *store.Store, resolve Resolver, opts Options) ([]TitleReport, error) {
-	subscriptions, err := st.Subscriptions(ctx)
+	titles, err := st.Titles(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	reports := make([]TitleReport, 0, len(subscriptions))
-	for _, title := range subscriptions {
+	reports := make([]TitleReport, 0, len(titles))
+	for _, title := range titles {
 		if opts.SkipCompleted && Completed(title.Status) {
 			reports = append(reports, TitleReport{Title: title, Skipped: true})
 			continue

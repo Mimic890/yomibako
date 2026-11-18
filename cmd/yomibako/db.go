@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -93,81 +92,6 @@ func runList(args []string) error {
 	}
 	fmt.Println()
 	fmt.Println("* - подписка включена")
-	return nil
-}
-
-// ── subscribe / unsubscribe ────────────────────────────────────────────────────────────────────
-
-func runSubscribe(args []string) error {
-	fs := flag.NewFlagSet("subscribe", flag.ContinueOnError)
-	var c common
-	c.register(fs)
-	interval := fs.Int("interval", 24, "как часто проверять, в часах")
-	if err := fs.Parse(reorderArgs(args)); err != nil {
-		return err
-	}
-	if fs.NArg() == 0 {
-		return errors.New("нужен slug или ссылка")
-	}
-	return changeSubscription(c, fs.Arg(0), *interval, true)
-}
-
-func runUnsubscribe(args []string) error {
-	fs := flag.NewFlagSet("unsubscribe", flag.ContinueOnError)
-	var c common
-	c.register(fs)
-	if err := fs.Parse(reorderArgs(args)); err != nil {
-		return err
-	}
-	if fs.NArg() == 0 {
-		return errors.New("нужен slug или ссылка")
-	}
-	return changeSubscription(c, fs.Arg(0), 0, false)
-}
-
-func changeSubscription(c common, rawSlug string, interval int, subscribe bool) error {
-	cfg, registry, err := c.load()
-	if err != nil {
-		return err
-	}
-	src, slug, err := registry.Resolve(rawSlug)
-	if err != nil {
-		return err
-	}
-	st, err := openStore(cfg)
-	if err != nil {
-		return err
-	}
-	defer st.Close()
-
-	ctx, cancel := contextWithSignals()
-	defer cancel()
-
-	title, err := src.Title(ctx, slug)
-	if err != nil {
-		return err
-	}
-	chapters, err := src.Chapters(ctx, title.Slug)
-	if err != nil {
-		return err
-	}
-	volumes := build.GroupVolumes(chapters)
-	id, err := recordTitle(ctx, st, src, title, len(chapters), len(volumes))
-	if err != nil {
-		return err
-	}
-
-	if subscribe {
-		if err := st.Subscribe(ctx, id, interval); err != nil {
-			return err
-		}
-		fmt.Printf("подписка на %s, проверка каждые %d ч\n", title.Title, interval)
-		return nil
-	}
-	if err := st.Unsubscribe(ctx, id); err != nil {
-		return err
-	}
-	fmt.Printf("подписка на %s снята\n", title.Title)
 	return nil
 }
 

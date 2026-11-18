@@ -127,11 +127,9 @@ func (b *Bot) help() string {
 Источники манги и манхвы: %s
 
 /add &lt;ссылка&gt; - выбрать тома или главы и собрать
-/check [ссылка] - новые тома и главы; без ссылки завершённые пропускаются
+/check [ссылка] - проверить все тайтлы на новинки (или один по ссылке)
 /sync - сверить базу с библиотекой
 /list - что уже в базе
-/subscribe &lt;ссылка&gt; - следить за тайтлом (проверка по /check)
-/unsubscribe &lt;ссылка&gt; - перестать следить
 /queue - что качается и что в очереди
 /delete [ссылка] - удалить тайтл из базы и дока
 /status - сводка
@@ -184,8 +182,6 @@ func (b *Bot) Run(ctx context.Context) error {
 		{"add", "собрать том или главу и отдать в BookOrbit"},
 		{"check", "новые тома и главы"},
 		{"sync", "сверить базу с библиотекой"},
-		{"subscribe", "следить за тайтлом"},
-		{"unsubscribe", "перестать следить"},
 		{"queue", "что качается и что в очереди"},
 		{"delete", "удалить тайтл из базы и дока"},
 		{"status", "сводка"},
@@ -270,10 +266,6 @@ func (b *Bot) handle(ctx context.Context, message *telegram.Message) {
 		b.clearCookies(ctx, message.Chat.ID)
 	case "add":
 		b.add(ctx, message.Chat.ID, args)
-	case "subscribe":
-		b.subscribe(ctx, message.Chat.ID, args, true)
-	case "unsubscribe":
-		b.subscribe(ctx, message.Chat.ID, args, false)
 	default:
 		b.reply(ctx, message.Chat.ID, "не знаю такую команду. /help")
 	}
@@ -403,8 +395,8 @@ func (b *Bot) status(ctx context.Context, chatID int64) {
 		b.reply(ctx, chatID, "ошибка базы: "+html.EscapeString(err.Error()))
 		return
 	}
-	text := fmt.Sprintf("тайтлов: %d\nтомов и глав: %d (импортировано %d)\nподписок: %d",
-		stats.Titles, stats.Volumes, stats.Imported, stats.Subscriptions)
+	text := fmt.Sprintf("тайтлов: %d\nтомов и глав: %d (импортировано %d)",
+		stats.Titles, stats.Volumes, stats.Imported)
 	if stats.Missing > 0 {
 		text += fmt.Sprintf("\nнет в библиотеке: %d", stats.Missing)
 	}
@@ -451,13 +443,13 @@ func (b *Bot) check(ctx context.Context, chatID int64, args []string) {
 			return
 		}
 		if len(reports) == 0 {
-			b.reply(ctx, chatID, "подписок нет")
+			b.reply(ctx, chatID, "в базе пусто")
 			return
 		}
 	}
 
 	var out strings.Builder
-	newUnits, updated, skipped := 0, 0, 0
+	newUnits, updated, skipped, failed := 0, 0, 0, 0
 	for _, report := range reports {
 		if report.Skipped {
 			skipped++
@@ -465,11 +457,12 @@ func (b *Bot) check(ctx context.Context, chatID int64, args []string) {
 		}
 		name := html.EscapeString(report.Title.Title)
 		if report.Err != nil {
-			fmt.Fprintf(&out, "%s: ошибка %s\n", name, html.EscapeString(report.Err.Error()))
+			// A source that cannot be read is skipped: the rest of the check still runs.
+			failed++
+			logx.Warnf("проверка «%s» пропущена: %v", report.Title.Title, report.Err)
 			continue
 		}
 		if len(report.New) == 0 && len(report.Updated) == 0 {
-			fmt.Fprintf(&out, "%s: без изменений\n", name)
 			continue
 		}
 		fmt.Fprintf(&out, "<b>%s</b>\n", name)
@@ -484,6 +477,9 @@ func (b *Bot) check(ctx context.Context, chatID int64, args []string) {
 	}
 	if skipped > 0 {
 		fmt.Fprintf(&out, "завершённых пропущено: %d (проверить: /check &lt;ссылка&gt;)\n", skipped)
+	}
+	if failed > 0 {
+		fmt.Fprintf(&out, "не удалось проверить: %d\n", failed)
 	}
 	if newUnits == 0 && updated == 0 {
 		out.WriteString("\nнового нет")
@@ -1097,68 +1093,6 @@ func nextTasks(tasks []*task, busy map[string]bool) []*task {
 		start = append(start, t)
 	}
 	return start
-}
-
-func (b *Bot) subscribe(ctx context.Context, chatID int64, args []string, subscribe bool) {
-	if len(args) == 0 {
-		b.reply(ctx, chatID, "нужна ссылка на тайтл")
-		return
-	}
-	src, slug, err := b.registry.Resolve(args[0])
-	if err != nil {
-		b.reply(ctx, chatID, html.EscapeString(err.Error()))
-		return
-	}
-
-	title, err := src.Title(ctx, slug)
-	if err != nil {
-		b.reply(ctx, chatID, "не нашёл: "+html.EscapeString(err.Error()))
-		return
-	}
-	chapters, err := src.Chapters(ctx, title.Slug)
-	if err != nil {
-		b.reply(ctx, chatID, "ошибка: "+html.EscapeString(err.Error()))
-		return
-	}
-	volumes := build.GroupVolumes(chapters)
-	id, err := b.st.UpsertTitle(ctx, store.Title{
-		Source:        src.Name(),
-		Slug:          title.Slug,
-		Title:         title.Title,
-		Authors:       title.Authors,
-		CoverURL:      title.CoverURL,
-		SourceURL:     title.SourceURL,
-		TotalChapters: len(chapters),
-		TotalVolumes:  len(volumes),
-		Kind:          string(src.Kind()),
-		Status:        title.Status,
-	})
-	if err != nil {
-		b.reply(ctx, chatID, "ошибка базы: "+html.EscapeString(err.Error()))
-		return
-	}
-
-	if !subscribe {
-		if err := b.st.Unsubscribe(ctx, id); err != nil {
-			b.reply(ctx, chatID, "ошибка базы: "+html.EscapeString(err.Error()))
-			return
-		}
-		b.reply(ctx, chatID, "подписка снята: "+html.EscapeString(title.Title))
-		return
-	}
-
-	hours := 24
-	if len(args) > 1 {
-		if parsed, err := strconv.Atoi(args[1]); err == nil && parsed > 0 {
-			hours = parsed
-		}
-	}
-	if err := b.st.Subscribe(ctx, id, hours); err != nil {
-		b.reply(ctx, chatID, "ошибка базы: "+html.EscapeString(err.Error()))
-		return
-	}
-	// Nothing runs on a timer: the subscription only marks the title for /check.
-	b.reply(ctx, chatID, fmt.Sprintf("слежу за «%s» - новинки ищутся по /check", html.EscapeString(title.Title)))
 }
 
 // flowMessage sends a step of the /add dialogue and removes the previous step, so the chat does not

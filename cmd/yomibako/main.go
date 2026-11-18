@@ -34,8 +34,6 @@ const usage = `yomibako - загрузка тайтлов в EPUB и CBZ
   yomibako volumes <ссылка>
   yomibako add <ссылка> [--volume 1,2 | --all] [--out DIR] [--dock DIR] [--wait]
   yomibako list
-  yomibako subscribe <ссылка> [--interval 24]
-  yomibako unsubscribe <ссылка>
   yomibako check
   yomibako sync
   yomibako bot
@@ -80,10 +78,6 @@ func run(args []string) error {
 		return runAdd(rest)
 	case "list":
 		return runList(rest)
-	case "subscribe":
-		return runSubscribe(rest)
-	case "unsubscribe":
-		return runUnsubscribe(rest)
 	case "check":
 		return runCheck(rest)
 	case "sync":
