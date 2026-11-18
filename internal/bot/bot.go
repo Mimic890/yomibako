@@ -873,7 +873,7 @@ func (b *Bot) confirm(ctx context.Context, chatID int64, src source.Source, slug
 		SourceURL:     title.SourceURL,
 		TotalChapters: len(chapters),
 		TotalVolumes:  len(groups),
-		Kind:          string(source.KindNovel),
+		Kind:          string(src.Kind()),
 	})
 	present := map[string]bool{}
 	if labels, err := b.st.VolumeLabels(ctx, titleID); err == nil {
